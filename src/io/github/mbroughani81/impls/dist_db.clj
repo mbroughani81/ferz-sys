@@ -11,7 +11,7 @@
 
 ;; -------------------------------------------------- ;;
 
-(def interrupt (atom false))
+(def interrupt (promise))
 
 ;; -------------------------------------------------- ;;
 
@@ -23,6 +23,9 @@
   (-> {:type :heart-beat
        :id   id}))
 
+(defn cons-start-db []
+  (-> {:type :start-db}))
+
 ;; -------------------------------------------------- ;;
 
 (defn cons-Send-Heart-Beat []
@@ -30,9 +33,8 @@
 
 ;; -------------------------------------------------- ;;
 
-(defn get-replication-cnt [state partition-id]
-  (let [p-id->n-id (-> state :partition-id->node-id)
-        nodes-list (get p-id->n-id partition-id)]
+(defn get-replication-cnt [p-id->n-id partition-id]
+  (let [nodes-list (get p-id->n-id partition-id)]
     (count nodes-list)))
 
 (defn get-node-partition [partition-id->node-id node-id]
@@ -48,14 +50,15 @@
         id->nodes-automaton (-> controller :id->nodes-automaton)]
     (timbre/info "Node id =>" (-> node deref :id))
     (timbre/info "type " (type node) (type (deref node)) (-> node deref keys))
-    (swap! id->nodes-automaton (fn [x] (assoc x (-> node deref :id) node))))
+    (swap! id->nodes-automaton (fn [x] (assoc x (-> node deref :id) node)))
+    (timbre/info "OKKKK")
+    )
   (-> nil))
 
 (defn handle-heart-beat [controller m]
-  (timbre/info "Got heart-beat => " m)
   (let [state (-> controller :state)
         id    (-> m :id)]
-    (swap! state (fn [x] (assoc x id :active))))
+    (swap! state (fn [s] (assoc-in s [:node-id->status id] :active))))
   (-> nil))
 
 (defn handle-topo-update [controller]
@@ -64,13 +67,21 @@
         replication-factor (-> old-state :replication-factor)]
     (loop [partition-id 0]
       (let [state                   (-> controller :state deref)
-            current-replication-cnt (get-replication-cnt state partition-id)
+            partition-id->node-id   (-> state :partition-id->node-id)
+            node-id->status         (-> state :node-id->status)
+            ;; delete the inactive nodes from topology
+            partition-id->node-id   (->> partition-id->node-id
+                                         (map (fn [[p-id n-ids]]
+                                                (-> [p-id
+                                                     (remove #(= (get node-id->status %) :dead)
+                                                                  n-ids)]))))
+            ;;
+            current-replication-cnt (get-replication-cnt partition-id->node-id
+                                                         partition-id)
             remaining-cnt           (- replication-factor current-replication-cnt)
-            current-p-nodes         (-> state
-                                        :partition-id->node-id
+            current-p-nodes         (-> partition-id->node-id
                                         (get partition-id))
-            active-nodes            (->> state
-                                         :node-id->status
+            active-nodes            (->> node-id->status
                                          (filter #(= (second %) :active))
                                          (map first))
             candidates              (->> active-nodes
@@ -78,8 +89,7 @@
             node-partitions         (->> candidates
                                          (map
                                           #(-> [% (get-node-partition
-                                                   (-> state
-                                                       :partition-id->node-id) %)]))
+                                                   partition-id->node-id %)]))
                                          (into {}))
             _                       (timbre/spy node-partitions)
             final-cands             (->> candidates
@@ -104,7 +114,7 @@
       (when-not (== partition-id (dec partition-count))
         (recur (inc partition-id))))))
 
-(defn handle-start [controller]
+(defn handle-start-db [controller]
   (handle-topo-update controller))
 
 (defrecord Controller [id->nodes-automaton ->buff state]
@@ -114,7 +124,7 @@
   (receive [this m]
     (case (:type m)
       :join        (handle-join this m)
-      :start-db    (handle-start this)
+      :start-db    (handle-start-db this)
       :topo-update (handle-topo-update this)
       :heart-beat  (handle-heart-beat this m)
       nil)))
@@ -131,7 +141,7 @@
   (async/thread
     (loop []
       (step/step A)
-      (when (-> interrupt deref not)
+      (when (-> interrupt realized? not)
         (recur)))))
 
 ;; -------------------------------------------------- ;;
@@ -164,7 +174,7 @@
 
 ;; -------------------------------------------------- ;;
 
-(defn start-Node-Runner [A]
+(defn start-Node-Runner [A shutdown]
   (let [cancel-chime (chime/chime-at
                       (chime/periodic-seq (Instant/now) (Duration/ofSeconds 5))
                       (fn [time]
@@ -174,7 +184,7 @@
     (async/thread
       (loop []
         (Thread/sleep 5000)
-        (when (-> interrupt deref)
+        (when (or (realized? interrupt) (realized? shutdown))
           (timbre/info "GGG")
           (cancel-chime))
         (recur))))
@@ -183,7 +193,7 @@
     ;; Add a ticker that will send A a :send-heart-beat event
     (loop []
       (step/step A)
-      (when (-> interrupt deref not)
+      (when (-> interrupt realized? not)
         (recur)))))
 
 (comment

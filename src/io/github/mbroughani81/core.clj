@@ -21,6 +21,11 @@
 
 
 (comment
+  (do
+    (timbre/set-min-level! :debug))
+
+;;
+
   (def a1 (atom nil))
   (def a2 (atom nil))
   (swap! a1 (fn [_] (sample-adder/cons-A1 a2)))
@@ -45,13 +50,24 @@
     (automaton/give @controller (dist-db/cons-Join n2))
     (automaton/give @controller (dist-db/cons-Join n3))
 ;;
-    (dist-db/start-Node-Runner n1)
-    (dist-db/start-Node-Runner n2)
-    (dist-db/start-Node-Runner n3)
+    (def sh1 (promise))
+    (def sh2 (promise))
+    (def sh3 (promise))
+    (dist-db/start-Node-Runner n1 sh1)
+    (dist-db/start-Node-Runner n2 sh2)
+    (dist-db/start-Node-Runner n3 sh3)
     (dist-db/start-Controller-Runner controller)
+
+    (Thread/sleep 2000)
+    (automaton/give @controller (dist-db/cons-start-db))
 
 ;;
     )
+
+  (-> controller deref :id->nodes-automaton deref keys)
+  (-> controller deref :state)
+
+  (deliver dist-db/interrupt :stop)
 
 ;;
   )
