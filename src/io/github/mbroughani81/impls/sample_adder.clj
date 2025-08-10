@@ -3,7 +3,8 @@
    [io.github.mbroughani81.automaton :as automaton]
 
    [taoensso.timbre :as timbre]
-   [clojure.core.async :as async]))
+   [clojure.core.async :as async]
+   [io.github.mbroughani81.step :as step]))
 
 ;; -------------------------------------------------- ;;
 
@@ -62,3 +63,8 @@
             :state  (atom 0)}))
 
 
+(defn start-runner [A]
+  (async/thread
+    (loop []
+      (step/step A)
+      (recur))))

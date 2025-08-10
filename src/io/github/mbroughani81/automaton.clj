@@ -3,4 +3,3 @@
 (defprotocol Automaton
   (give [this m])
   (receive [this m]))
-
