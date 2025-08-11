@@ -65,8 +65,10 @@
     )
 
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
+  (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "value3"))
 
   (dist-db/get-partition 5 "k1")
+  (dist-db/get-partition 5 "k3")
 
   (deliver dist-db/interrupt :stop)
 
