@@ -23,13 +23,31 @@
   (-> {:type :heart-beat
        :id   id}))
 
-(defn cons-start-db []
+(defn cons-Start-DB []
   (-> {:type :start-db}))
+
+(defn cons-Read-Ctrl [key]
+  (-> {:type :read-ctrl
+       :key  key}))
+
+(defn cons-Write-Ctrl [key value]
+  (-> {:type  :write-ctrl
+       :key   key
+       :value value}))
 
 ;; -------------------------------------------------- ;;
 
 (defn cons-Send-Heart-Beat []
   (-> {:type :send-heart-beat}))
+
+(defn cons-Write [key value]
+  (-> {:type  :write
+       :key   key
+       :value value}))
+
+(defn cons-update-topo-snapshot [topo]
+  (-> {:type :update-topo-snapshot
+       :topo topo}))
 
 ;; -------------------------------------------------- ;;
 
@@ -42,6 +60,16 @@
        (filter #(contains? (set (second %)) node-id))
        (map first)))
 
+(defn get-partition [partition-count key]
+  (-> key hash abs (mod partition-count)))
+
+(defn update-nodes-topo-snapshot [controller]
+  (let [id->nodes-automaton (-> controller :id->nodes-automaton deref)
+        nodes               (vals id->nodes-automaton)]
+    (timbre/info "HERE" (count nodes))
+    (doseq [node nodes]
+      (automaton/give @node (cons-update-topo-snapshot id->nodes-automaton)))))
+
 ;; -------------------------------------------------- ;;
 
 (defn handle-join [controller m]
@@ -51,8 +79,7 @@
     (timbre/info "Node id =>" (-> node deref :id))
     (timbre/info "type " (type node) (type (deref node)) (-> node deref keys))
     (swap! id->nodes-automaton (fn [x] (assoc x (-> node deref :id) node)))
-    (timbre/info "OKKKK")
-    )
+    (timbre/info "OKKKK"))
   (-> nil))
 
 (defn handle-heart-beat [controller m]
@@ -69,13 +96,14 @@
       (let [state                   (-> controller :state deref)
             partition-id->node-id   (-> state :partition-id->node-id)
             node-id->status         (-> state :node-id->status)
+            partition-id->leader-id (-> state :partition-id->leader-id)
             ;; delete the inactive nodes from topology
             partition-id->node-id   (->> partition-id->node-id
                                          (map (fn [[p-id n-ids]]
                                                 (-> [p-id
                                                      (remove #(= (get node-id->status %) :dead)
-                                                                  n-ids)]))))
-            ;;
+                                                             n-ids)]))))
+            ;; assign new nodes
             current-replication-cnt (get-replication-cnt partition-id->node-id
                                                          partition-id)
             remaining-cnt           (- replication-factor current-replication-cnt)
@@ -110,12 +138,51 @@
                                                                   #(conj % n-id)))))
                                             nil
                                             final-cands)
-            _                       (timbre/debug "state => " (-> controller :state deref))])
+            _                       (timbre/debug "state-v1 => " (-> controller :state deref))
+            ;; doing leader election
+            nodes                   (-> controller
+                                        :state
+                                        deref
+                                        :partition-id->node-id
+                                        (get partition-id))
+            leader-id               (get partition-id->leader-id partition-id)
+            leader-exists?          (= nil leader-id)
+            leader-dead?            (= (get node-id->status leader-id) :dead)
+            _                       (when (or leader-exists? leader-dead?)
+                                      (let [leader-id (rand-nth nodes)]
+                                        (swap! (-> controller :state)
+                                               (fn [x]
+                                                 (assoc-in x
+                                                           [:partition-id->leader-id
+                                                            partition-id]
+                                                           leader-id)))))
+            _                       (timbre/debug "state-v2 => " (-> controller :state deref))])
       (when-not (== partition-id (dec partition-count))
         (recur (inc partition-id))))))
 
 (defn handle-start-db [controller]
-  (handle-topo-update controller))
+  (handle-topo-update controller)
+  (update-nodes-topo-snapshot controller))
+
+(defn handle-read-ctrl [this m])
+
+(defn handle-write-ctrl [controller m]
+  ;; find the leader, and send "write" event to it.
+  ;; find the partition id.
+  (let [id->node-automaton      (-> controller :id->nodes-automaton deref)
+        state                   (-> controller :state deref)
+        partition-id->leader-id (-> state :partition-id->leader-id)
+        key                     (-> m :key)
+        value                   (-> m :value)
+        partition-count         (-> state :partition-count)
+        ;;
+        p-id                    (get-partition partition-count key)
+        leader-id               (get partition-id->leader-id p-id)
+        node                    (get id->node-automaton leader-id)
+        _                       (timbre/info "state => " state)
+        _                       (timbre/info "leader-id => " leader-id)
+        _                       (timbre/info "node => " (type node) (-> node deref :id))
+        _                       (automaton/give @node (cons-Write key value))]))
 
 (defrecord Controller [id->nodes-automaton ->buff state]
   automaton/Automaton
@@ -126,16 +193,19 @@
       :join        (handle-join this m)
       :start-db    (handle-start-db this)
       :topo-update (handle-topo-update this)
+      :read-ctrl   (handle-read-ctrl this m)
+      :write-ctrl  (handle-write-ctrl this m)
       :heart-beat  (handle-heart-beat this m)
       nil)))
 
 (defn cons-Controller [id->nodes-automaton]
-  (map->Controller {:id->nodes-automaton id->nodes-automaton
+  (map->Controller {:id->nodes-automaton id->nodes-automaton ;; TODO I don't think this need to be an atom
                     :->buff              (async/chan 100)
-                    :state               (atom {:partition-count       5
-                                                :replication-factor    2
-                                                :partition-id->node-id {}
-                                                :node-id->status       {}})}))
+                    :state               (atom {:partition-count         5
+                                                :replication-factor      2
+                                                :partition-id->node-id   {}
+                                                :partition-id->leader-id {}
+                                                :node-id->status         {}})}))
 
 (defn start-Controller-Runner [A]
   (async/thread
@@ -151,24 +221,45 @@
         id         (-> node :id)]
     (automaton/give controller (cons-Heart-Beat id))))
 
+(defn handle-write [node m]
+  (let [state (-> node :state deref)
+        data  (-> state :data)
+        key   (-> m :key)
+        value (-> m :value)
+        data  (assoc data key value)
+        _     (swap! (-> node :state)
+                     (fn [s]
+                       (assoc s :data data)))
+        _     (timbre/info "node-state => " (-> node :state deref))]))
+
+(defn handle-update-topo-snapshot [node m]
+  (let [topo (-> m :topo)
+        _    (swap! (-> node :state)
+                 (fn [s]
+                   (assoc s :topo topo)))
+        _    (timbre/info "state-after-update-topo-snapshot => "
+                          (-> node :state deref))]))
+
 (defrecord Node [controller id ->buff state]
   automaton/Automaton
   (give [_ m]
     (async/>!! ->buff m))
   (receive [this m]
     (case (:type m)
-      :write
-      :read
-      :change-role
-      :assign-partition
-      :send-heart-beat (handle-send-heart-beat this)
+      :write                (handle-write this m)
+      ;; :read
+      ;; :change-role
+      ;; :assign-partition
+      :send-heart-beat      (handle-send-heart-beat this)
+      :update-topo-snapshot (handle-update-topo-snapshot this m)
       nil)))
 
 (defn cons-Node [controller id]
   (map->Node {:controller controller
               :id         id
               :->buff     (async/chan 100)
-              :state      (atom {})}))
+              :state      (atom {:data {}
+                                 :topo nil})}))
 
 ;; -------------------------------------------------- ;;
 
@@ -209,6 +300,9 @@
     (handle-topo-update c)
     ;;
     )
+
+  (doseq [x ["1" "222" "3333" "44444" "55555" "a" "b" "c" "dd5" "xyz" "hello" "world" "ddd" "3123" "3vcv" "3123d" "4234134"]]
+    (println (mod (hash x) 7)))
 
 ;;
   )

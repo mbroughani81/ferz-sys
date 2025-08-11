@@ -59,15 +59,23 @@
     (dist-db/start-Controller-Runner controller)
 
     (Thread/sleep 2000)
-    (automaton/give @controller (dist-db/cons-start-db))
+    (automaton/give @controller (dist-db/cons-Start-DB))
 
 ;;
     )
 
+  (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
+
+  (dist-db/get-partition 5 "k1")
+
+  (deliver dist-db/interrupt :stop)
+
   (-> controller deref :id->nodes-automaton deref keys)
   (-> controller deref :state)
 
-  (deliver dist-db/interrupt :stop)
+  (-> n3 deref :state deref :topo (get 1) deref :id)
+ 
+  (-> n1 deref :state)
 
 ;;
   )
