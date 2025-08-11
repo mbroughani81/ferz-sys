@@ -74,8 +74,14 @@
   (-> controller deref :state)
 
   (-> n3 deref :state deref :topo (get 1) deref :id)
- 
-  (-> n1 deref :state)
+
+  (-> n1 deref :state deref :topo :partition-id->node-id)
+  (-> n2 deref :state deref :topo :partition-id->node-id)
+  (-> n3 deref :state deref :topo :partition-id->node-id)
+
+  (-> n1 deref :state deref :data)
+  (-> n2 deref :state deref :data)
+  (-> n3 deref :state deref :data)
 
 ;;
   )

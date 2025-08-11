@@ -64,11 +64,16 @@
   (-> key hash abs (mod partition-count)))
 
 (defn update-nodes-topo-snapshot [controller]
-  (let [id->nodes-automaton (-> controller :id->nodes-automaton deref)
-        nodes               (vals id->nodes-automaton)]
+  (let [id->nodes-automaton     (-> controller :id->nodes-automaton deref)
+        partition-id->node-id   (-> controller :state deref :partition-id->node-id)
+        partition-id->leader-id (-> controller :state deref :partition-id->leader-id)
+        nodes                   (vals id->nodes-automaton)]
     (timbre/info "HERE" (count nodes))
     (doseq [node nodes]
-      (automaton/give @node (cons-update-topo-snapshot id->nodes-automaton)))))
+      (automaton/give @node (cons-update-topo-snapshot
+                             {:id->nodes-automaton     id->nodes-automaton
+                              :partition-id->node-id   partition-id->node-id
+                              :partition-id->leader-id partition-id->leader-id})))))
 
 ;; -------------------------------------------------- ;;
 
@@ -162,6 +167,7 @@
 
 (defn handle-start-db [controller]
   (handle-topo-update controller)
+  (timbre/info "should-be-here => " (-> controller :state deref))
   (update-nodes-topo-snapshot controller))
 
 (defn handle-read-ctrl [this m])
@@ -182,6 +188,7 @@
         _                       (timbre/info "state => " state)
         _                       (timbre/info "leader-id => " leader-id)
         _                       (timbre/info "node => " (type node) (-> node deref :id))
+        _                       (timbre/info "NODEEE" (-> node type) (-> node deref :id))
         _                       (automaton/give @node (cons-Write key value))]))
 
 (defrecord Controller [id->nodes-automaton ->buff state]
@@ -222,23 +229,41 @@
     (automaton/give controller (cons-Heart-Beat id))))
 
 (defn handle-write [node m]
-  (let [state (-> node :state deref)
-        data  (-> state :data)
-        key   (-> m :key)
-        value (-> m :value)
-        data  (assoc data key value)
-        _     (swap! (-> node :state)
-                     (fn [s]
-                       (assoc s :data data)))
-        _     (timbre/info "node-state => " (-> node :state deref))]))
+  (timbre/info "HERE?????")
+  (let [state              (-> node :state deref)
+        data               (-> state :data)
+        topo               (-> state :topo)
+        id->node-automaton (-> topo :id->nodes-automaton)
+        n-id               (-> node :id)
+        key                (-> m :key)
+        value              (-> m :value)
+        p-id               (get-partition 5 key) ;;TODO hardcoded
+        data               (assoc data key value)
+        _                  (swap! (-> node :state)
+                                  (fn [s]
+                                    (assoc s :data data)))
+        ;; _                  (timbre/info "node-state => " (-> node :state deref))
+        ;; if leader, stream the changes to other nodes
+        is-leader?         (= (-> topo :partition-id->leader-id (get p-id)) n-id)
+        p-node-ids         (-> topo :partition-id->node-id (get p-id))
+        ;; _                  (when is-leader?
+        ;;                      (doseq [p-node-id p-node-ids]
+        ;;                        (let [p-node (get id->node-automaton p-node-id)]
+        ;;                          (when (not= p-node-ids n-id)
+        ;;                            (automaton/give @p-node (cons-Write key value))))))
+        ]))
 
 (defn handle-update-topo-snapshot [node m]
+  (timbre/info "updated!!")
   (let [topo (-> m :topo)
+        ;; _    (def tttt topo)
         _    (swap! (-> node :state)
-                 (fn [s]
-                   (assoc s :topo topo)))
-        _    (timbre/info "state-after-update-topo-snapshot => "
-                          (-> node :state deref))]))
+                    (fn [s]
+                      (assoc s :topo topo)))
+        ;; _    (timbre/info "state-after-update-topo-snapshot => "
+        ;;                   (-> node :state deref))
+        ])
+  (-> nil))
 
 (defrecord Node [controller id ->buff state]
   automaton/Automaton
@@ -283,6 +308,7 @@
   (async/thread
     ;; Add a ticker that will send A a :send-heart-beat event
     (loop []
+      (timbre/info "Waiting for event in node " (-> @A :id))
       (step/step A)
       (when (-> interrupt realized? not)
         (recur)))))
@@ -303,6 +329,14 @@
 
   (doseq [x ["1" "222" "3333" "44444" "55555" "a" "b" "c" "dd5" "xyz" "hello" "world" "ddd" "3123" "3vcv" "3123d" "4234134"]]
     (println (mod (hash x) 7)))
+
+  (-> tttt keys)
+
+  (-> tttt :partition-id->node-id)
+  (-> tttt :partition-id->leader-id)
+  (-> tttt :id->nodes-automaton keys)
+
+   
 
 ;;
   )
