@@ -246,11 +246,11 @@
         ;; if leader, stream the changes to other nodes
         is-leader?         (= (-> topo :partition-id->leader-id (get p-id)) n-id)
         p-node-ids         (-> topo :partition-id->node-id (get p-id))
-        ;; _                  (when is-leader?
-        ;;                      (doseq [p-node-id p-node-ids]
-        ;;                        (let [p-node (get id->node-automaton p-node-id)]
-        ;;                          (when (not= p-node-ids n-id)
-        ;;                            (automaton/give @p-node (cons-Write key value))))))
+        _                  (when is-leader?
+                             (doseq [p-node-id p-node-ids]
+                               (let [p-node (get id->node-automaton p-node-id)]
+                                 (when (not= p-node-id n-id)
+                                   (automaton/give @p-node (cons-Write key value))))))
         ]))
 
 (defn handle-update-topo-snapshot [node m]
