@@ -22,7 +22,7 @@
 
 (comment
   (do
-    (timbre/set-min-level! :debug))
+    (timbre/set-min-level! :info))
 
 ;;
 
@@ -65,7 +65,11 @@
     )
 
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
+  (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "sechs"))
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "value3"))
+  (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "vv"))
+
+  (automaton/give @controller (dist-db/cons-Read-Ctrl "k3"))
 
   (dist-db/get-partition 5 "k1")
   (dist-db/get-partition 5 "k3")

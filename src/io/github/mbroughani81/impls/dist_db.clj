@@ -45,6 +45,10 @@
        :key   key
        :value value}))
 
+(defn cons-Read [key]
+  (-> {:type :read
+       :key  key}))
+
 (defn cons-update-topo-snapshot [topo]
   (-> {:type :update-topo-snapshot
        :topo topo}))
@@ -170,7 +174,18 @@
   (timbre/info "should-be-here => " (-> controller :state deref))
   (update-nodes-topo-snapshot controller))
 
-(defn handle-read-ctrl [this m])
+(defn handle-read-ctrl [controller m]
+  (let [id->node-automaton    (-> controller :id->nodes-automaton deref)
+        state                 (-> controller :state deref)
+        partition-id->node-id (-> state :partition-id->node-id)
+        key                   (-> m :key)
+        partition-count       (-> state :partition-count)
+        ;;
+        p-id                  (get-partition partition-count key)
+        nodes                 (get partition-id->node-id p-id)
+        node-id               (rand-nth nodes)
+        node                  (get id->node-automaton node-id)
+        _                     (automaton/give @node (cons-Read key))]))
 
 (defn handle-write-ctrl [controller m]
   ;; find the leader, and send "write" event to it.
@@ -185,10 +200,6 @@
         p-id                    (get-partition partition-count key)
         leader-id               (get partition-id->leader-id p-id)
         node                    (get id->node-automaton leader-id)
-        _                       (timbre/info "state => " state)
-        _                       (timbre/info "leader-id => " leader-id)
-        _                       (timbre/info "node => " (type node) (-> node deref :id))
-        _                       (timbre/info "NODEEE" (-> node type) (-> node deref :id))
         _                       (automaton/give @node (cons-Write key value))]))
 
 (defrecord Controller [id->nodes-automaton ->buff state]
@@ -253,6 +264,13 @@
                                    (automaton/give @p-node (cons-Write key value))))))
         ]))
 
+(defn handle-read [node m]
+  (timbre/info "read from node " (-> node :id))
+  (let [data  (-> node :state deref :data)
+        key   (-> m :key)
+        value (get data key)]
+    (timbre/info "Read Result: " value)))
+
 (defn handle-update-topo-snapshot [node m]
   (timbre/info "updated!!")
   (let [topo (-> m :topo)
@@ -272,7 +290,7 @@
   (receive [this m]
     (case (:type m)
       :write                (handle-write this m)
-      ;; :read
+      :read                 (handle-read this m)
       ;; :change-role
       ;; :assign-partition
       :send-heart-beat      (handle-send-heart-beat this)
@@ -308,7 +326,7 @@
   (async/thread
     ;; Add a ticker that will send A a :send-heart-beat event
     (loop []
-      (timbre/info "Waiting for event in node " (-> @A :id))
+      (timbre/debug "Waiting for event in node " (-> @A :id))
       (step/step A)
       (when (-> interrupt realized? not)
         (recur)))))
