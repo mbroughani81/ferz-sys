@@ -291,8 +291,6 @@
     (case (:type m)
       :write                (handle-write this m)
       :read                 (handle-read this m)
-      ;; :change-role
-      ;; :assign-partition
       :send-heart-beat      (handle-send-heart-beat this)
       :update-topo-snapshot (handle-update-topo-snapshot this m)
       nil)))
@@ -348,13 +346,6 @@
   (doseq [x ["1" "222" "3333" "44444" "55555" "a" "b" "c" "dd5" "xyz" "hello" "world" "ddd" "3123" "3vcv" "3123d" "4234134"]]
     (println (mod (hash x) 7)))
 
-  (-> tttt keys)
-
-  (-> tttt :partition-id->node-id)
-  (-> tttt :partition-id->leader-id)
-  (-> tttt :id->nodes-automaton keys)
-
-   
 
 ;;
   )

@@ -1,0 +1,95 @@
+(ns io.github.mbroughani81.perf.test1
+  (:require
+   [clojure.test :as t]
+
+   [taoensso.timbre :as timbre]
+   [taoensso.tufte :as tufte]
+
+   [io.github.mbroughani81.automaton :as automaton]
+   [io.github.mbroughani81.impls.dist-db :as dist-db]))
+
+(t/deftest simple-3-node-exec
+  (let [controller (atom nil)
+        n1         (atom nil)
+        n2         (atom nil)
+        n3         (atom nil)
+        _          (swap! controller (fn [_] (dist-db/cons-Controller (atom {}))))
+        _          (swap! n1 (fn [_] (dist-db/cons-Node controller 1)))
+        _          (swap! n2 (fn [_] (dist-db/cons-Node controller 2)))
+        _          (swap! n3 (fn [_] (dist-db/cons-Node controller 3)))
+        _          (automaton/give @controller (dist-db/cons-Join n1))
+        _          (automaton/give @controller (dist-db/cons-Join n2))
+        _          (automaton/give @controller (dist-db/cons-Join n3))
+        sh1        (promise)
+        sh2        (promise)
+        sh3        (promise)
+        _          (dist-db/start-Node-Runner n1 sh1)
+        _          (dist-db/start-Node-Runner n2 sh2)
+        _          (dist-db/start-Node-Runner n3 sh3)
+        _          (dist-db/start-Controller-Runner controller)
+        _          (Thread/sleep 2000)
+        _          (automaton/give @controller (dist-db/cons-Start-DB))
+        _          (Thread/sleep 2000)
+        _          (dist-db/get-partition 5 "k1")
+        _          (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
+        _          (automaton/give @controller (dist-db/cons-Read-Ctrl "k1"))
+        LIMIT      100
+        _          (loop [cnt 0]
+                     (let [e (dist-db/cons-Read-Ctrl "k1")
+                           _ (automaton/give @controller e)])
+                     (when (< cnt LIMIT)
+                       (recur (inc cnt))))
+        _          (Thread/sleep 10000)]
+    (deliver dist-db/interrupt :stop)))
+
+(comment
+  (simple-3-node-exec)
+
+
+  (do
+    (timbre/set-min-level! :info))
+
+  (do
+    (def controller (atom nil))
+    (def n1 (atom nil))
+    (def n2 (atom nil))
+    (def n3 (atom nil))
+    (swap! controller (fn [_] (dist-db/cons-Controller (atom {}))))
+    (swap! n1 (fn [_] (dist-db/cons-Node controller 1)))
+    (swap! n2 (fn [_] (dist-db/cons-Node controller 2)))
+    (swap! n3 (fn [_] (dist-db/cons-Node controller 3)))
+
+    (automaton/give @controller (dist-db/cons-Join n1))
+    (automaton/give @controller (dist-db/cons-Join n2))
+    (automaton/give @controller (dist-db/cons-Join n3))
+;;
+    (def sh1 (promise))
+    (def sh2 (promise))
+    (def sh3 (promise))
+    (dist-db/start-Node-Runner n1 sh1)
+    (dist-db/start-Node-Runner n2 sh2)
+    (dist-db/start-Node-Runner n3 sh3)
+    (dist-db/start-Controller-Runner controller)
+
+    (Thread/sleep 2000)
+    (automaton/give @controller (dist-db/cons-Start-DB))
+    (Thread/sleep 2000)
+;;
+    )
+  (dist-db/get-partition 5 "k1")
+  (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
+  (automaton/give @controller (dist-db/cons-Read-Ctrl "k1"))
+
+  (-> @controller :state deref :partition-id->node-id)
+
+  (def LIMIT 10000000)
+  (loop [cnt 0]
+    (let [e (dist-db/cons-Read-Ctrl "k1")
+          _ (automaton/give @controller e)])
+    (when (< cnt LIMIT)
+      (recur (inc cnt))))
+
+  (deliver dist-db/interrupt :stop)
+
+;;
+  )
