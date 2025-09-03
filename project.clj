@@ -8,7 +8,14 @@
                  [mvxcvi/puget "1.3.4"]
                  [com.taoensso/tufte "3.0.0"]
                  [com.taoensso/timbre "6.6.2"]
+                 [com.clojure-goes-fast/clj-async-profiler "1.6.2"]
                  [jarohen/chime "0.3.3"]]
   :repl-options {:init-ns io.github.mbroughani81.core}
+  ;; :profiles {:attach {:jvm-opts ["-Djdk.attach.allowAttachSelf"]}}
+  ;; :aliases {"attach" ["with-profile" "+attach" "run"]}
+  :jvm-opts ["-Djdk.attach.allowAttachSelf"
+             ;; "-XX:+UnlockDiagnosticVMOptions"
+             ;; "-XX:+DebugNonSafepoints"
+             ]
   :main io.github.mbroughani81.core
   :aot [io.github.mbroughani81.core])

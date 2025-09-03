@@ -12,6 +12,12 @@
 ;; -------------------------------------------------- ;;
 ;; -------------------------------------------------- ;;
 
+
+(Thread/setDefaultUncaughtExceptionHandler
+ (reify Thread$UncaughtExceptionHandler
+   (uncaughtException [_ thread ex]
+     (timbre/error ex "Uncaught exception on" (.getName thread)))))
+
 (defn -main [& _]
   (println "Hello"))
 

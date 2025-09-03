@@ -1,15 +1,18 @@
 (ns io.github.mbroughani81.perf.test1
   (:require
    [clojure.test :as t]
+   [clojure.java.io :as io]
 
    [taoensso.timbre :as timbre]
-   [taoensso.tufte :as tufte]
+   [clj-async-profiler.core :as prof]
 
    [io.github.mbroughani81.automaton :as automaton]
    [io.github.mbroughani81.impls.dist-db :as dist-db]))
 
-(t/deftest simple-3-node-exec
-  (let [controller (atom nil)
+(t/deftest simple-3-node-exec []
+  (let [_          (dist-db/reset-proj!)
+        ;;
+        controller (atom nil)
         n1         (atom nil)
         n2         (atom nil)
         n3         (atom nil)
@@ -33,7 +36,7 @@
         _          (dist-db/get-partition 5 "k1")
         _          (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
         _          (automaton/give @controller (dist-db/cons-Read-Ctrl "k1"))
-        LIMIT      100
+        LIMIT      100000
         _          (loop [cnt 0]
                      (let [e (dist-db/cons-Read-Ctrl "k1")
                            _ (automaton/give @controller e)])
@@ -42,13 +45,14 @@
         _          (Thread/sleep 10000)]
     (deliver dist-db/interrupt :stop)))
 
+
 (comment
   (simple-3-node-exec)
-
-
-  (do
-    (timbre/set-min-level! :info))
-
+  ;;
+  (timbre/set-min-level! :warn)
+  (prof/serve-ui 8080)
+  (prof/profile (simple-3-node-exec))
+  ;;
   (do
     (def controller (atom nil))
     (def n1 (atom nil))
@@ -90,6 +94,33 @@
       (recur (inc cnt))))
 
   (deliver dist-db/interrupt :stop)
+
+;;
+  (prof/profile (reduce + (range 1000000)))
+  (def results-dir "/tmp/clj-async-profiler/results/")
+  (def latest-file (->> (io/file results-dir)
+                        (file-seq)
+                        (filter #(re-find #"collapsed.txt$" (.getName %)))
+                        (sort-by #(.lastModified %))
+                        (last)))
+  latest-file
+  (timbre/info
+   (when latest-file
+     (slurp latest-file)))
+;;
+  (let [;;
+        filter [{:type :filter
+                 :what "io.github.mbroughani81"}
+                {:type :remove
+                 :what "start_thread"}]
+        ;;
+        ;; filter []
+        ;;
+        ]
+    (prof/profile
+     {:event                 :cpu
+      :predefined-transforms filter}
+     (simple-3-node-exec)))
 
 ;;
   )

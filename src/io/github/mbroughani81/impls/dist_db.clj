@@ -11,7 +11,9 @@
 
 ;; -------------------------------------------------- ;;
 
-(def interrupt (promise))
+(def interrupt nil)
+(defn reset-proj! []
+  (alter-var-root #'interrupt (fn [_] (promise))))
 
 ;; -------------------------------------------------- ;;
 
@@ -261,8 +263,7 @@
                              (doseq [p-node-id p-node-ids]
                                (let [p-node (get id->node-automaton p-node-id)]
                                  (when (not= p-node-id n-id)
-                                   (automaton/give @p-node (cons-Write key value))))))
-        ]))
+                                   (automaton/give @p-node (cons-Write key value))))))]))
 
 (defn handle-read [node m]
   (timbre/info "read from node " (-> node :id))
@@ -345,7 +346,6 @@
 
   (doseq [x ["1" "222" "3333" "44444" "55555" "a" "b" "c" "dd5" "xyz" "hello" "world" "ddd" "3123" "3vcv" "3123d" "4234134"]]
     (println (mod (hash x) 7)))
-
 
 ;;
   )
