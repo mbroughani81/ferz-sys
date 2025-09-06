@@ -11,6 +11,7 @@ pom.xml.asc
 /.prepl-port
 .hgignore
 .hg/
+*.jfr
 
 .clj-kondo
 .lsp

@@ -7,7 +7,9 @@
    [io.github.mbroughani81.automaton :as automaton]
    [io.github.mbroughani81.step :as step])
   (:import
-   [java.time Instant Duration]))
+   [java.time Instant Duration]
+   [mm FnCallEvent]
+   ))
 
 ;; -------------------------------------------------- ;;
 
@@ -266,10 +268,15 @@
                                    (automaton/give @p-node (cons-Write key value))))))]))
 
 (defn handle-read [node m]
-  (timbre/info "read from node " (-> node :id))
-  (let [data  (-> node :state deref :data)
+  (let [
+        e     (FnCallEvent.)
+        _     (.begin e)
+        _     (timbre/info "read from node " (-> node :id))
+        data  (-> node :state deref :data)
         key   (-> m :key)
-        value (get data key)]
+        value (get data key)
+        _     (.commit e)
+        ]
     (timbre/info "Read Result: " value)))
 
 (defn handle-update-topo-snapshot [node m]

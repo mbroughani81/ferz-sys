@@ -5,9 +5,9 @@
    [io.github.mbroughani81.impls.dist-db :as dist-db]
    [io.github.mbroughani81.automaton :as automaton]
 
-   [clojure.core.async :as async]
    [taoensso.timbre :as timbre]
-   [io.github.mbroughani81.step :as step]))
+
+   [io.github.mbroughani81.perf.test1 :as test1]))
 
 ;; -------------------------------------------------- ;;
 ;; -------------------------------------------------- ;;
@@ -19,7 +19,11 @@
      (timbre/error ex "Uncaught exception on" (.getName thread)))))
 
 (defn -main [& _]
-  (println "Hello"))
+  (timbre/info "Hello")
+  (timbre/set-min-level! :warn)
+  (test1/simple-3-node-exec)
+  (shutdown-agents)
+  (System/exit 0))
 
 ;; -------------------------------------------------- ;;
 

@@ -42,7 +42,8 @@
                            _ (automaton/give @controller e)])
                      (when (< cnt LIMIT)
                        (recur (inc cnt))))
-        _          (Thread/sleep 10000)]
+        _          (Thread/sleep 5000)]
+    (timbre/info "FINISHED")
     (deliver dist-db/interrupt :stop)))
 
 
@@ -109,17 +110,18 @@
      (slurp latest-file)))
 ;;
   (let [;;
-        filter [{:type :filter
-                 :what "io.github.mbroughani81"}
-                {:type :remove
-                 :what "start_thread"}]
+        ;; filter [{:type :filter
+        ;;          :what "io.github.mbroughani81"}
+        ;;         {:type :remove
+        ;;          :what "start_thread"}]
         ;;
-        ;; filter []
+        filter []
         ;;
         ]
     (prof/profile
-     {:event                 :cpu
-      :predefined-transforms filter}
+     {:event                 :wall
+      :predefined-transforms filter
+      :threads               :true}
      (simple-3-node-exec)))
 
 ;;

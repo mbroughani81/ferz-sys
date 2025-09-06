@@ -10,6 +10,7 @@
                  [com.taoensso/timbre "6.6.2"]
                  [com.clojure-goes-fast/clj-async-profiler "1.6.2"]
                  [jarohen/chime "0.3.3"]]
+  :java-source-paths ["src/io/github/mbroughani81/java"]
   :repl-options {:init-ns io.github.mbroughani81.core}
   ;; :profiles {:attach {:jvm-opts ["-Djdk.attach.allowAttachSelf"]}}
   ;; :aliases {"attach" ["with-profile" "+attach" "run"]}
