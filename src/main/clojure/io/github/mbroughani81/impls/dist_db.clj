@@ -8,7 +8,7 @@
    [io.github.mbroughani81.step :as step])
   (:import
    [java.time Instant Duration]
-   [mm FnCallEvent]
+   [io.github.mbroughani81 FnCallEvent]
    ))
 
 ;; -------------------------------------------------- ;;
