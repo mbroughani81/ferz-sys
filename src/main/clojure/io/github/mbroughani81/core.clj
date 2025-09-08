@@ -3,11 +3,11 @@
   (:require
    [io.github.mbroughani81.impls.sample-adder :as sample-adder]
    [io.github.mbroughani81.impls.dist-db :as dist-db]
+   [io.github.mbroughani81.gcbench.bench :as bench]
    [io.github.mbroughani81.automaton :as automaton]
+   [io.github.mbroughani81.perf.test1 :as test1]
 
-   [taoensso.timbre :as timbre]
-
-   [io.github.mbroughani81.perf.test1 :as test1]))
+   [taoensso.timbre :as timbre]))
 
 ;; -------------------------------------------------- ;;
 ;; -------------------------------------------------- ;;
@@ -21,7 +21,8 @@
 (defn -main [& _]
   (timbre/info "Hello")
   (timbre/set-min-level! :warn)
-  (test1/simple-3-node-exec)
+  ;; (test1/simple-3-node-exec)
+  (bench/exec 2000000 200000)
   (shutdown-agents)
   (System/exit 0))
 
