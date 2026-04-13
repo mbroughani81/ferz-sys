@@ -48,6 +48,7 @@
   (sample-adder/start-runner a2)
 ;;
   (do
+    (dist-db/reset-proj!)
     (def controller (atom nil))
     (def n1 (atom nil))
     (def n2 (atom nil))
@@ -73,6 +74,7 @@
     (automaton/give @controller (dist-db/cons-Start-DB))
 
 ;;
+    clojure.lang.PersistentVector
     )
 
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
@@ -80,7 +82,7 @@
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "value3"))
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "vv"))
 
-  (automaton/give @controller (dist-db/cons-Read-Ctrl "k3"))
+  (automaton/give @controller (dist-db/cons-Read-Ctrl "k1"))
 
   (dist-db/get-partition 5 "k1")
   (dist-db/get-partition 5 "k3")
