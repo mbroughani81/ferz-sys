@@ -5,9 +5,9 @@
    [io.github.mbroughani81.impls.dist-db :as dist-db]
    [io.github.mbroughani81.gcbench.bench :as bench]
    [io.github.mbroughani81.automaton :as automaton]
-   [io.github.mbroughani81.perf.test1 :as test1]
-
-   [taoensso.timbre :as timbre]))
+   [taoensso.timbre :as timbre])
+  (:import
+   [io.github.mbroughani81 FalseSharingBenchmark LockContentionBenchmark MemoryBarrierBenchmark Simulation1]))
 
 ;; -------------------------------------------------- ;;
 ;; -------------------------------------------------- ;;
@@ -19,10 +19,12 @@
      (timbre/error ex "Uncaught exception on" (.getName thread)))))
 
 (defn -main [& _]
-  (timbre/info "Hello")
   (timbre/set-min-level! :warn)
-  ;; (test1/simple-3-node-exec)
-  (bench/exec 2000000 200000)
+  ;; (bench/exec 2000000 200)
+  ;; (FalseSharingBenchmark/main (into-array String []))
+  ;; (LockContentionBenchmark/main (into-array String []))
+  ;; (MemoryBarrierBenchmark/main (into-array String []))
+  (Simulation1/main (into-array String []))
   (shutdown-agents)
   (System/exit 0))
 

@@ -76,7 +76,6 @@
         partition-id->node-id   (-> controller :state deref :partition-id->node-id)
         partition-id->leader-id (-> controller :state deref :partition-id->leader-id)
         nodes                   (vals id->nodes-automaton)]
-    (timbre/info "HERE" (count nodes))
     (doseq [node nodes]
       (automaton/give @node (cons-update-topo-snapshot
                              {:id->nodes-automaton     id->nodes-automaton
@@ -86,13 +85,9 @@
 ;; -------------------------------------------------- ;;
 
 (defn handle-join [controller m]
-  (timbre/info "MMM => " (:type m) (keys m))
   (let [node (-> m :node)
         id->nodes-automaton (-> controller :id->nodes-automaton)]
-    (timbre/info "Node id =>" (-> node deref :id))
-    (timbre/info "type " (type node) (type (deref node)) (-> node deref keys))
-    (swap! id->nodes-automaton (fn [x] (assoc x (-> node deref :id) node)))
-    (timbre/info "OKKKK"))
+    (swap! id->nodes-automaton (fn [x] (assoc x (-> node deref :id) node))))
   (-> nil))
 
 (defn handle-heart-beat [controller m]
@@ -132,17 +127,11 @@
                                           #(-> [% (get-node-partition
                                                    partition-id->node-id %)]))
                                          (into {}))
-            _                       (timbre/spy node-partitions)
             final-cands             (->> candidates
                                          (sort-by (fn [n-id]
                                                     (count (get node-partitions n-id)))))
-            _                       (timbre/debug "candidates => " candidates)
-            _                       (timbre/debug "node-partitions => " node-partitions)
-            _                       (timbre/debug "final-cands => " final-cands)
             final-cands             (take remaining-cnt final-cands)
-            _                       (timbre/debug "FINAL => " final-cands)
             _                       (reduce (fn [_ n-id]
-                                              (timbre/debug "adding => " n-id)
                                               (swap! (-> controller :state)
                                                      (fn [x]
                                                        (update-in x
@@ -151,7 +140,6 @@
                                                                   #(conj % n-id)))))
                                             nil
                                             final-cands)
-            _                       (timbre/debug "state-v1 => " (-> controller :state deref))
             ;; doing leader election
             nodes                   (-> controller
                                         :state
@@ -168,14 +156,12 @@
                                                  (assoc-in x
                                                            [:partition-id->leader-id
                                                             partition-id]
-                                                           leader-id)))))
-            _                       (timbre/debug "state-v2 => " (-> controller :state deref))])
+                                                           leader-id)))))])
       (when-not (== partition-id (dec partition-count))
         (recur (inc partition-id))))))
 
 (defn handle-start-db [controller]
   (handle-topo-update controller)
-  (timbre/info "should-be-here => " (-> controller :state deref))
   (update-nodes-topo-snapshot controller))
 
 (defn handle-read-ctrl [controller m]
@@ -184,7 +170,6 @@
         partition-id->node-id (-> state :partition-id->node-id)
         key                   (-> m :key)
         partition-count       (-> state :partition-count)
-        ;;
         p-id                  (get-partition partition-count key)
         nodes                 (get partition-id->node-id p-id)
         node-id               (rand-nth nodes)
@@ -192,15 +177,12 @@
         _                     (automaton/give @node (cons-Read key))]))
 
 (defn handle-write-ctrl [controller m]
-  ;; find the leader, and send "write" event to it.
-  ;; find the partition id.
   (let [id->node-automaton      (-> controller :id->nodes-automaton deref)
         state                   (-> controller :state deref)
         partition-id->leader-id (-> state :partition-id->leader-id)
         key                     (-> m :key)
         value                   (-> m :value)
         partition-count         (-> state :partition-count)
-        ;;
         p-id                    (get-partition partition-count key)
         leader-id               (get partition-id->leader-id p-id)
         node                    (get id->node-automaton leader-id)
@@ -221,7 +203,7 @@
       nil)))
 
 (defn cons-Controller [id->nodes-automaton]
-  (map->Controller {:id->nodes-automaton id->nodes-automaton ;; TODO I don't think this need to be an atom
+  (map->Controller {:id->nodes-automaton id->nodes-automaton
                     :->buff              (async/chan 100)
                     :state               (atom {:partition-count         5
                                                 :replication-factor      2
@@ -244,7 +226,6 @@
     (automaton/give controller (cons-Heart-Beat id))))
 
 (defn handle-write [node m]
-  (timbre/info "HERE?????")
   (let [state              (-> node :state deref)
         data               (-> state :data)
         topo               (-> state :topo)
@@ -257,7 +238,6 @@
         _                  (swap! (-> node :state)
                                   (fn [s]
                                     (assoc s :data data)))
-        ;; _                  (timbre/info "node-state => " (-> node :state deref))
         ;; if leader, stream the changes to other nodes
         is-leader?         (= (-> topo :partition-id->leader-id (get p-id)) n-id)
         p-node-ids         (-> topo :partition-id->node-id (get p-id))
@@ -271,7 +251,6 @@
   (let [
         e     (FnCallEvent.)
         _     (.begin e)
-        _     (timbre/info "read from node " (-> node :id))
         data  (-> node :state deref :data)
         key   (-> m :key)
         value (get data key)
@@ -285,10 +264,7 @@
         ;; _    (def tttt topo)
         _    (swap! (-> node :state)
                     (fn [s]
-                      (assoc s :topo topo)))
-        ;; _    (timbre/info "state-after-update-topo-snapshot => "
-        ;;                   (-> node :state deref))
-        ])
+                      (assoc s :topo topo)))])
   (-> nil))
 
 (defrecord Node [controller id ->buff state]
@@ -325,12 +301,10 @@
       (loop []
         (Thread/sleep 5000)
         (when (or (realized? interrupt) (realized? shutdown))
-          (timbre/info "GGG")
           (cancel-chime))
         (recur))))
 
   (async/thread
-    ;; Add a ticker that will send A a :send-heart-beat event
     (loop []
       (timbre/debug "Waiting for event in node " (-> @A :id))
       (step/step A)

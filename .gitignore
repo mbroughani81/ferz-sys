@@ -13,5 +13,7 @@ pom.xml.asc
 .hg/
 *.jfr
 
+*.html
+
 .clj-kondo
 .lsp
