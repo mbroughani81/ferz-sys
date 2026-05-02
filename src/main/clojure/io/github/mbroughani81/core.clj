@@ -7,11 +7,11 @@
    [io.github.mbroughani81.automaton :as automaton]
    [taoensso.timbre :as timbre])
   (:import
-   [io.github.mbroughani81 FalseSharingBenchmark LockContentionBenchmark MemoryBarrierBenchmark Simulation1]))
+   ;; [io.github.mbroughani81.scratch FalseSharingBenchmark LockContentionBenchmark MemoryBarrierBenchmark Simulation1]
+   [io.github.mbroughani81.demo NPlusOne]))
 
 ;; -------------------------------------------------- ;;
 ;; -------------------------------------------------- ;;
-
 
 (Thread/setDefaultUncaughtExceptionHandler
  (reify Thread$UncaughtExceptionHandler
@@ -24,20 +24,22 @@
   ;; (FalseSharingBenchmark/main (into-array String []))
   ;; (LockContentionBenchmark/main (into-array String []))
   ;; (MemoryBarrierBenchmark/main (into-array String []))
-  (Simulation1/main (into-array String []))
+  ;; (Simulation1/main (into-array String []))
+  ;; (println "Hii")
+  ;; (NPlusOne/main (into-array String []))
   (shutdown-agents)
   (System/exit 0))
 
 ;; -------------------------------------------------- ;;
-
-
-
 
 (comment
   (do
     (timbre/set-min-level! :info))
 
 ;;
+  (-main [])
+
+  ;;
 
   (def a1 (atom nil))
   (def a2 (atom nil))
@@ -76,8 +78,7 @@
     (automaton/give @controller (dist-db/cons-Start-DB))
 
 ;;
-    clojure.lang.PersistentVector
-    )
+    clojure.lang.PersistentVector)
 
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
   (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "sechs"))
@@ -103,6 +104,35 @@
   (-> n1 deref :state deref :data)
   (-> n2 deref :state deref :data)
   (-> n3 deref :state deref :data)
-
 ;;
+  (import '[sootup.core.inputlocation AnalysisInputLocation])
+  (import '[sootup.java.bytecode.frontend.inputlocation OTFCompileAnalysisInputLocation])
+  (import '[sootup.java.core.views JavaView])
+  (import '[sootup.java.core.types JavaClassType])
+  (import '[java.nio.file Paths])
+  (def classpath-dir (Paths/get "src/main/java/io/github/mbroughani81/demo/NPlusOne.java" (into-array String [])))
+  (def input-location (OTFCompileAnalysisInputLocation. classpath-dir))
+  (def view (JavaView. input-location))
+  (def factory (.getIdentifierFactory view))
+  (def class-name "io.github.mbroughani81.demo.NPlusOne")
+  (def class-type (.getClassType factory class-name))
+  (def soot-class (.getClass view class-type))
+  (println "Class present?" (.isPresent soot-class))
+  (def my-class (.get soot-class))
+  (.getName my-class)
+
+  (def methods (seq (.getMethods my-class)))
+  (println "Number of methods:" (count methods))
+
+  (doseq [method methods]
+    (println (.getSignature method)))
+  ;;
+  (import 'io.github.mbroughani81.flowgen.FlowGenerator)
+  (def classpath "src/main/java/io/github/mbroughani81/demo/NPlusOne.java")
+  (def generator (FlowGenerator. classpath))
+  (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.AuthorService"))
+  ;; TODO get the more condensed version later
+  (def trace (.getPath (first (.getTraces (first method-trace-sets)))))
+  (doseq [t trace] (println t))
+  ;;
   )
