@@ -13,6 +13,8 @@ public @interface IOSpec {
 
     TimeUnit unit() default TimeUnit.MILLISECONDS;
 
+    boolean sink() default false;
+
     int percentile() default 100;
 
     String desc() default "";

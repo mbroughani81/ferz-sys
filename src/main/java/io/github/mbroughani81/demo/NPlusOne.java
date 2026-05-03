@@ -183,7 +183,7 @@ class MockDatabaseConnection implements DatabaseConnection {
 
     @Override
     @SuppressWarnings("unchecked")
-    @IOSpec(max = 100, unit = TimeUnit.MILLISECONDS, percentile = 100, desc = "Single DB Op")
+    @IOSpec(max = 100, unit = TimeUnit.MILLISECONDS, sink = true, percentile = 100, desc = "Single DB Op")
     public <T> List<T> query(String sql, Object[] params, Class<T> resultType) {
         logQuery(sql, params);
         simulateDatabaseLatency();
@@ -245,6 +245,10 @@ class AuthorService {
         System.out.println("   Authors fetched: " + authors.size());
 
         for (Author author : authors) {
+            db.query(
+                    "SELECT * FROM books WHERE author_id = ?",
+                    new Object[] { author.getId() },
+                    Book.class);
             List<Book> books = db.query(
                     "SELECT * FROM books WHERE author_id = ?",
                     new Object[] { author.getId() },

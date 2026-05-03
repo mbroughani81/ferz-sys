@@ -3,11 +3,11 @@ package io.github.mbroughani81.flowgen;
 import java.util.List;
 
 public class MethodTraceSet {
-    private String method;
-    private SpecInfo spec;
-    private List<Trace> traces;
+    public String method;
+    public SpecInfo spec;
+    public List<Trace> traces;
 
-    // Getters and Setters for PTestFlow
+    // Getters and Setters for MethodTraceSet fields
     public String getMethod() {
         return method;
     }
@@ -32,40 +32,13 @@ public class MethodTraceSet {
         this.traces = traces;
     }
 
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append("MethodTraceSet {\n");
-        sb.append("  method='").append(method).append("'\n");
-
-        if (spec != null) {
-            sb.append("  spec=").append(spec).append("\n");
-        } else {
-            sb.append("  spec=null\n");
-        }
-
-        if (traces != null && !traces.isEmpty()) {
-            sb.append("  traces (").append(traces.size()).append("):\n");
-            for (Trace trace : traces) {
-                sb.append("    ").append(trace).append("\n");
-            }
-        } else {
-            sb.append("  traces=[]\n");
-        }
-
-        sb.append("}");
-
-        return sb.toString();
-    }
-
     public static class SpecInfo {
-        private String type;
-        private long max;
-        private String unit;
-        private int percentile;
+        public String type;
+        public long max;
+        public String unit;
+        public int percentile;
 
-        // Getters and Setters for SpecInfo
+        // Getters and Setters for SpecInfo fields
         public String getType() {
             return type;
         }
@@ -110,11 +83,14 @@ public class MethodTraceSet {
     }
 
     public static class Trace {
-        private String id;
-        private List<String> path;
-        private List<String> tags;
+        public String id;
+        public List<String> path;
+        public List<String> tags;
+        public long estimatedCost;       // total estimated cost (known + est)
+        public long knownCost;           // sum of inner @IOSpec costs
+        public String riskLevel;         // GUARANTEED_VIOLATION, SUSPECTED, LOW_RISK
 
-        // Getters and Setters for Flow
+        // Getters and Setters for Trace fields
         public String getId() {
             return id;
         }
@@ -139,12 +115,39 @@ public class MethodTraceSet {
             this.tags = tags;
         }
 
+        public long getEstimatedCost() {
+            return estimatedCost;
+        }
+
+        public void setEstimatedCost(long estimatedCost) {
+            this.estimatedCost = estimatedCost;
+        }
+
+        public long getKnownCost() {
+            return knownCost;
+        }
+
+        public void setKnownCost(long knownCost) {
+            this.knownCost = knownCost;
+        }
+
+        public String getRiskLevel() {
+            return riskLevel;
+        }
+
+        public void setRiskLevel(String riskLevel) {
+            this.riskLevel = riskLevel;
+        }
+
         @Override
         public String toString() {
             return "Trace{" +
                     "id='" + id + '\'' +
                     ", path=" + path +
                     ", tags=" + tags +
+                    ", estimatedCost=" + estimatedCost +
+                    ", knownCost=" + knownCost +
+                    ", riskLevel='" + riskLevel + '\'' +
                     '}';
         }
     }

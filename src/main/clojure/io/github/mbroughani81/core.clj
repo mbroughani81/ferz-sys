@@ -127,12 +127,21 @@
   (doseq [method methods]
     (println (.getSignature method)))
   ;;
-  (import 'io.github.mbroughani81.flowgen.FlowGenerator)
-  (def classpath "src/main/java/io/github/mbroughani81/demo/NPlusOne.java")
-  (def generator (FlowGenerator. classpath))
-  (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.AuthorService"))
-  ;; TODO get the more condensed version later
-  (def trace (.getPath (first (.getTraces (first method-trace-sets)))))
-  (doseq [t trace] (println t))
+  (do
+    (import 'io.github.mbroughani81.flowgen.TraceGenerator)
+    (def classpath "src/main/java/io/github/mbroughani81/demo/NPlusOne.java")
+    (def generator (TraceGenerator. classpath))
+    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.AuthorService"))
+    (def trace (.getPath (first (.getTraces (first method-trace-sets)))))
+    (doseq [t trace] (println t)))
+  ;;
+  (defn print-path [trace]
+    (doseq [t (.getPath trace)] (println t)))
+
+  (def first-set (first method-trace-sets))
+  (def trace1 (nth (.getTraces first-set) 0))
+  (def trace2 (nth (.getTraces first-set) 1))
+  (print-path trace2)
+
   ;;
   )
