@@ -183,7 +183,7 @@ class MockDatabaseConnection implements DatabaseConnection {
 
     @Override
     @SuppressWarnings("unchecked")
-    @IOSpec(max = 100, unit = TimeUnit.MILLISECONDS, sink = true, percentile = 100, desc = "Single DB Op")
+    @IOSpec(max = 10, unit = TimeUnit.MILLISECONDS, sink = true, percentile = 100, desc = "Single DB Op")
     public <T> List<T> query(String sql, Object[] params, Class<T> resultType) {
         logQuery(sql, params);
         simulateDatabaseLatency();

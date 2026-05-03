@@ -138,10 +138,29 @@
   (defn print-path [trace]
     (doseq [t (.getPath trace)] (println t)))
 
+  (defn trace-diff [trace1 trace2]
+    (let [path1 (.getPath trace1)
+          path2 (.getPath trace2)]
+      (if (= path1 path2)
+        (println "Traces are identical.")
+        (let [pairs (map vector path1 path2)
+              first-diff (first (filter (fn [[a b]] (not= a b)) pairs))]
+          (println "Traces differ. First difference at index" (count (take-while (fn [[a b]] (= a b)) pairs)) ":")
+          (println "  Trace1 line:" (first first-diff))
+          (println "  Trace2 line:" (second first-diff))))))
+
   (def first-set (first method-trace-sets))
+  (def second-set (second method-trace-sets))
   (def trace1 (nth (.getTraces first-set) 0))
   (def trace2 (nth (.getTraces first-set) 1))
-  (print-path trace2)
+  (print-path (nth (.getTraces first-set) 0))
+
+  (defn diff-trace-against-all [target-trace other-traces]
+    (doseq [t other-traces]
+      (println "Comparing with trace:" (.getId t))
+      (trace-diff target-trace t)
+      (println "---")))
+  (diff-trace-against-all trace1 (rest (.getTraces first-set)))
 
   ;;
   )

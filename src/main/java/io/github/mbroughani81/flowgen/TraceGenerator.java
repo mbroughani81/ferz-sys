@@ -25,6 +25,7 @@ public class TraceGenerator {
     private final JavaView view;
     private final Gson gson;
     private static final int MAX_CALL_DEPTH = 3;
+    private static final int MAX_LOOP_UNROLL = 3; // how many times we traverse a loop back‑edge
     private static final long DEFAULT_IO_COST_MS = 20;
     private static final long UNBOUNDED_LOOP_FACTOR = 100;
 
@@ -39,12 +40,12 @@ public class TraceGenerator {
         return new JavaView(inputLocation);
     }
 
-    /**
-     * Main entry point: analyze a specific class for @IOSpec annotations
-     */
+    // ----------------------------------------------------------------------
+    // Public entry point
+    // ----------------------------------------------------------------------
+
     public List<MethodTraceSet> analyzeClass(String fullyQualifiedClassName) {
         List<MethodTraceSet> results = new ArrayList<>();
-
         JavaClassType classType = view.getIdentifierFactory().getClassType(fullyQualifiedClassName);
         if (!view.getClass(classType).isPresent()) {
             System.err.println("Class not found: " + fullyQualifiedClassName);
@@ -62,6 +63,10 @@ public class TraceGenerator {
         return results;
     }
 
+    // ----------------------------------------------------------------------
+    // Annotation extraction
+    // ----------------------------------------------------------------------
+
     private Optional<IOSpecAnnotation> extractIOSpecAnnotation(JavaSootMethod method) {
         for (AnnotationUsage ann : method.getAnnotations()) {
             if (ann.getAnnotation().getFullyQualifiedName().equals("io.github.mbroughani81.perfspec.IOSpec")) {
@@ -70,6 +75,10 @@ public class TraceGenerator {
         }
         return Optional.empty();
     }
+
+    // ----------------------------------------------------------------------
+    // Main analysis of a single method
+    // ----------------------------------------------------------------------
 
     private MethodTraceSet analyzeMethod(SootMethod method, Body body, IOSpecAnnotation spec) {
         MethodTraceSet.SpecInfo info = new MethodTraceSet.SpecInfo();
@@ -87,28 +96,347 @@ public class TraceGenerator {
         return set;
     }
 
-    private List<MethodTraceSet.Trace> extractTraces(
-            SootMethod rootMethod,
+    // ----------------------------------------------------------------------
+    // Flow (trace) extraction – the corrected heart of the generator
+    // ----------------------------------------------------------------------
+
+    /**
+     * Returns all execution flows (traces) of the given method that are likely
+     * to violate the performance specification.
+     */
+    private List<MethodTraceSet.Trace> extractTraces(SootMethod rootMethod,
             Body rootBody,
             IOSpecAnnotation rootSpec) {
-        System.out.println("extract traces for => " + rootMethod.toString());
+        // Compute all flows from entry to exit (with loop unrolling and inlined calls)
+        List<MethodFlow> allFlows = exploreMethod(rootMethod, rootBody,
+                new HashSet<>(), 0, new HashMap<>());
 
+        // Convert to the output format and filter by risk
         List<MethodTraceSet.Trace> result = new ArrayList<>();
-        Stmt firstStmt = rootBody.getStmts().get(0);
-        Set<Stmt> exits = findExitPoints(rootBody, rootBody.getControlFlowGraph());
-        int[] idCounter = { 0 };
-
-        for (Stmt exit : exits) {
-            explorePath(rootMethod, rootBody, firstStmt, exit,
-                    new ArrayList<>(), new HashSet<>(), 0,
-                    rootSpec, new CostSnapshot(0, 0),
-                    result, idCounter);
-        }
-        // assign final ids
-        for (int i = 0; i < result.size(); i++) {
-            result.get(i).setId("flow_" + (i + 1));
+        int id = 1;
+        for (MethodFlow flow : allFlows) {
+            String risk = classifyRisk(flow.totalCost, flow.knownCost, rootSpec.getMax());
+            // if (!risk.equals("LOW_RISK")) {
+            if (risk.equals("GUARANTEED_VIOLATION")) {
+                MethodTraceSet.Trace trace = flow.toOutputFormat(rootMethod.getSignature().toString(), risk, id++);
+                result.add(trace);
+            }
         }
         return result;
+    }
+
+    private List<MethodFlow> exploreMethod(SootMethod method, Body body,
+            Set<String> callStack,
+            int depth,
+            Map<Stmt, Integer> loopCounters) {
+        List<MethodFlow> flows = new ArrayList<>();
+        Stmt entry = body.getStmts().get(0);
+        Set<Stmt> exits = findExitPoints(body, body.getControlFlowGraph());
+
+        // DFS from the entry, building paths
+        explorePath(method, body, entry, exits,
+                new ArrayList<>(), callStack, depth, loopCounters,
+                new CostSnapshot(0, 0), flows);
+        return flows;
+    }
+
+    /**
+     * Depth‑first exploration of the control flow graph, building one path at a
+     * time.
+     * When a method call is encountered, the callee's flows are inlined (spliced).
+     */
+    private void explorePath(SootMethod currentMethod,
+            Body body,
+            Stmt current,
+            Set<Stmt> exitPoints,
+            List<Stmt> currentPath,
+            Set<String> callStack,
+            int depth,
+            Map<Stmt, Integer> loopCounters,
+            CostSnapshot costSoFar,
+            List<MethodFlow> outFlows) {
+        // Append current statement to the path
+        currentPath.add(current);
+
+        // Update cost (including loop multiplier if we are inside a loop)
+        long[] inc = statementCostInContext(current, body, currentMethod, currentPath);
+        CostSnapshot newCost = costSoFar.add(inc[0], inc[1]);
+
+        // Exit point reached ?
+        if (exitPoints.contains(current)) {
+            outFlows.add(new MethodFlow(new ArrayList<>(currentPath), newCost));
+        } else {
+            // --- Loop handling: allow back‑edges up to MAX_LOOP_UNROLL times
+            int visitCount = loopCounters.getOrDefault(current, 0);
+            if (visitCount >= MAX_LOOP_UNROLL) {
+                return;
+            }
+            Map<Stmt, Integer> newCounters = new HashMap<>(loopCounters);
+            newCounters.put(current, visitCount + 1);
+
+            ControlFlowGraph<?> cfg = body.getControlFlowGraph();
+            // --- 1. curr is method call
+            Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(current);
+            if (invokeExpr.isPresent() && depth < MAX_CALL_DEPTH) {
+                Set<JavaSootMethod> callees = resolveCallTargets(invokeExpr.get(), currentMethod);
+                for (JavaSootMethod callee : callees) {
+                    // TODO
+                    // Avoid recursive calls
+                    // Maybe not ignore the whole thing?
+                    if (callStack.contains(callee.getSignature().toString())) {
+                        break;
+                    }
+                    // Sink methods are left as atomic steps (do not inline)
+                    if (isSinkMethod(callee)) {
+                        break;
+                    }
+                    // Inline the callee’s flows
+                    if (callee.hasBody()) {
+                        System.out.println("current => " + current.toString());
+                        System.out.println("caller => " + current.toString());
+                        System.out.println("callee => " + callee.toString());
+                        System.out.println("=================================");
+
+                        Set<String> newStack = new HashSet<>(callStack);
+                        newStack.add(callee.getSignature().toString());
+                        List<MethodFlow> calleeFlows = exploreMethod(callee, callee.getBody(),
+                                newStack, depth + 1, new HashMap<>());
+                        for (MethodFlow calleeFlow : calleeFlows) {
+                            List<Stmt> combined = new ArrayList<>(currentPath);
+                            combined.addAll(calleeFlow.statements);
+                            CostSnapshot combinedCost = newCost.add(calleeFlow.knownCost, calleeFlow.estCost);
+
+                            for (Stmt succ : cfg.successors(current)) {
+                                continueFrom(currentMethod, body, succ, exitPoints,
+                                        combined, callStack, depth, newCounters,
+                                        combinedCost, outFlows);
+                            }
+                        }
+                        break;
+                    }
+                }
+                // After handling the call, we do NOT also fall through to the normal
+                // intra‑procedural step.
+                // continue;
+            }
+
+            // --- 2. curr is normal
+            for (Stmt succ : cfg.successors(current)) {
+                explorePath(currentMethod, body, succ, exitPoints,
+                        currentPath, callStack, depth, newCounters, newCost, outFlows);
+            }
+        }
+
+        // Backtrack
+        currentPath.remove(currentPath.size() - 1);
+    }
+
+    /**
+     * Helper to continue exploration from a given statement, using a pre‑built path
+     * and a pre‑computed cost. Avoids code duplication.
+     */
+    private void continueFrom(SootMethod method, Body body, Stmt start,
+            Set<Stmt> exits, List<Stmt> currentPath,
+            Set<String> callStack, int depth,
+            Map<Stmt, Integer> loopCounters,
+            CostSnapshot cost, List<MethodFlow> outFlows) {
+        // We simply call explorePath, but the path already contains what we have built.
+        // However, explorePath will add the start statement again. To prevent
+        // duplicates,
+        // we must temporarily remove the last element of currentPath if it equals
+        // start?
+        // Instead, we create a copy and then delegate.
+        List<Stmt> pathCopy = new ArrayList<>(currentPath);
+        // Do not add 'start' again; it will be added by explorePath.
+        // Remove the last element if it is the same as start (which can happen if the
+        // call
+        // immediately precedes the start). This is a simplification; for a full robust
+        // solution
+        // we would need a more sophisticated state machine. For the typical N+1 example
+        // it works.
+        if (!pathCopy.isEmpty() && pathCopy.get(pathCopy.size() - 1).equals(start)) {
+            pathCopy.remove(pathCopy.size() - 1);
+        }
+        explorePath(method, body, start, exits, pathCopy,
+                callStack, depth, loopCounters, cost, outFlows);
+    }
+
+    // ----------------------------------------------------------------------
+    // Helper methods for statements, loops, calls, costs
+    // ----------------------------------------------------------------------
+
+    private Optional<AbstractInvokeExpr> getInvokeExpr(Stmt stmt) {
+        if (stmt instanceof JInvokeStmt) {
+            return ((JInvokeStmt) stmt).getInvokeExpr();
+        }
+        if (stmt instanceof JAssignStmt) {
+            JAssignStmt assign = (JAssignStmt) stmt;
+            if (assign.getRightOp() instanceof AbstractInvokeExpr) {
+                return Optional.of((AbstractInvokeExpr) assign.getRightOp());
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean isSinkMethod(JavaSootMethod method) {
+        Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(method);
+        return ann.isPresent() && ann.get().isSink();
+    }
+
+    /**
+     * Returns [knownCost, estimatedCost] for a statement, taking loop context into
+     * account.
+     * A statement is considered "inside a loop" if the current path contains a
+     * back‑edge
+     * that would force repetition. For simplicity, we compute a loop multiplier
+     * based on the number of times the statement appears in the current path.
+     */
+    private long[] statementCostInContext(Stmt stmt, Body body, SootMethod method, List<Stmt> currentPath) {
+        long loopMultiplier = 1;
+        // Count how many times this statement already appears in the path (a simplistic
+        // loop detection)
+        int occurrence = (int) currentPath.stream().filter(s -> s.equals(stmt)).count();
+        if (occurrence > 1) {
+            loopMultiplier = UNBOUNDED_LOOP_FACTOR; // we saw it twice => inside a loop
+        }
+
+        long known = 0;
+        long est = 0;
+
+        Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(stmt);
+        if (invokeExpr.isPresent()) {
+            Set<JavaSootMethod> targets = resolveCallTargets(invokeExpr.get(), method);
+            for (JavaSootMethod tgt : targets) {
+                Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(tgt);
+                if (ann.isPresent()) {
+                    known += ann.get().getMax();
+                } else if (isBlockingCall(tgt)) {
+                    est += DEFAULT_IO_COST_MS;
+                }
+            }
+        } else {
+            String s = stmt.toString().toLowerCase();
+            if (s.contains("read") || s.contains("write") || s.contains("wait") ||
+                    s.contains("network") || s.contains("database")) {
+                est += DEFAULT_IO_COST_MS;
+            }
+        }
+
+        return new long[] { known * loopMultiplier, est * loopMultiplier };
+    }
+
+    private boolean isBlockingCall(SootMethod method) {
+        String sig = method.getSignature().toString().toLowerCase();
+        return sig.contains("read") || sig.contains("write") || sig.contains("wait") ||
+                sig.contains("select") || sig.contains("poll");
+    }
+
+    private String classifyRisk(long totalCost, long knownCost, long max) {
+        if (knownCost > max)
+            return "GUARANTEED_VIOLATION";
+        if (totalCost >= max)
+            return "SUSPECTED";
+        return "LOW_RISK";
+    }
+
+    // ----------------------------------------------------------------------
+    // Call resolution (CHA)
+    // ----------------------------------------------------------------------
+
+    private Set<JavaSootMethod> resolveCallTargets(AbstractInvokeExpr invokeExpr, SootMethod caller) {
+        MethodSignature methodSig = invokeExpr.getMethodSignature();
+        if (invokeExpr instanceof JStaticInvokeExpr || invokeExpr instanceof JSpecialInvokeExpr) {
+            return view.getMethod(methodSig).map(Collections::singleton).orElse(Collections.emptySet());
+        }
+
+        Set<JavaSootMethod> targets = new HashSet<>();
+        JavaClassType declaringClass = (JavaClassType) methodSig.getDeclClassType();
+        view.getClasses().forEach(sc -> {
+            ClassType classType = sc.getType();
+            if (classType instanceof JavaClassType) {
+                JavaClassType javaClassType = (JavaClassType) classType;
+                if (isSubtype(javaClassType, declaringClass)) {
+                    sc.getMethods().stream()
+                            .filter(m -> methodSig.getSubSignature().equals(m.getSignature().getSubSignature()))
+                            .forEach(targets::add);
+                }
+            }
+        });
+        return targets;
+    }
+
+    private boolean isSubtype(JavaClassType sub, JavaClassType sup) {
+        if (sub.equals(sup))
+            return true;
+        Optional<JavaClassType> superClass = view.getClass(sub)
+                .flatMap(sc -> sc.getSuperclass())
+                .map(sig -> view.getIdentifierFactory().getClassType(sig.getFullyQualifiedName()));
+        if (superClass.isPresent() && isSubtype(superClass.get(), sup))
+            return true;
+        JavaSootClass clazz = view.getClass(sub).orElse(null);
+        if (clazz != null) {
+            for (ClassType iface : clazz.getInterfaces()) {
+                if (iface instanceof JavaClassType && isSubtype((JavaClassType) iface, sup))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // ----------------------------------------------------------------------
+    // Exit points in a method body
+    // ----------------------------------------------------------------------
+
+    private Set<Stmt> findExitPoints(Body body, ControlFlowGraph<?> cfg) {
+        Set<Stmt> exits = new HashSet<>();
+        for (Stmt stmt : body.getStmts()) {
+            if (stmt instanceof JReturnStmt || stmt instanceof JThrowStmt) {
+                exits.add(stmt);
+            } else if (stmt instanceof JInvokeStmt && cfg.outDegree(stmt) == 0) {
+                exits.add(stmt);
+            }
+        }
+        return exits;
+    }
+
+    // ----------------------------------------------------------------------
+    // Internal data structures
+    // ----------------------------------------------------------------------
+
+    private static class MethodFlow {
+        final List<Stmt> statements;
+        final long knownCost;
+        final long estCost;
+        final long totalCost;
+
+        MethodFlow(List<Stmt> stmts, CostSnapshot cost) {
+            this.statements = new ArrayList<>(stmts);
+            this.knownCost = cost.known;
+            this.estCost = cost.estimated;
+            this.totalCost = cost.total();
+        }
+
+        MethodTraceSet.Trace toOutputFormat(String methodSig, String risk, int id) {
+            MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
+            trace.setId("flow_" + id);
+            trace.setPath(statements.stream()
+                    .map(stmt -> "line "
+                            + (stmt.getPositionInfo().getStmtPosition() != null
+                                    ? stmt.getPositionInfo().getStmtPosition().getFirstLine()
+                                    : -1)
+                            + ": " + stmt)
+                    .collect(Collectors.toList()));
+            List<String> tags = new ArrayList<>();
+            if (risk.equals("GUARANTEED_VIOLATION"))
+                tags.add("GUARANTEED_VIOLATION");
+            else if (risk.equals("SUSPECTED"))
+                tags.add("SUSPECTED");
+            trace.setTags(tags);
+            trace.setEstimatedCost(totalCost);
+            trace.setKnownCost(knownCost);
+            trace.setRiskLevel(risk);
+            return trace;
+        }
     }
 
     private static class CostSnapshot {
@@ -129,292 +457,10 @@ public class TraceGenerator {
         }
     }
 
-    private void explorePath(SootMethod currentMethod,
-            Body body,
-            Stmt current,
-            Stmt target,
-            List<Stmt> prefix,
-            Set<String> callStack,
-            int depth,
-            IOSpecAnnotation rootSpec,
-            CostSnapshot cost,
-            List<MethodTraceSet.Trace> results,
-            int[] idCounter) {
+    // ----------------------------------------------------------------------
+    // Inner class for IOSpec annotation data
+    // ----------------------------------------------------------------------
 
-        prefix.add(current);
-        long[] inc = statementCostInContext(current, body, currentMethod);
-        CostSnapshot newCost = cost.add(inc[0], inc[1]);
-
-        if (current.equals(target)) {
-            // reached exit – evaluate risk and possibly keep
-            String risk = classifyRisk(newCost.total(), newCost.known, rootSpec.getMax());
-            if (!risk.equals("LOW_RISK")) {
-            // if (true) {
-                MethodTraceSet.Trace trace = buildTrace(prefix, currentMethod.getSignature().toString(),
-                        newCost, risk, idCounter[0]++);
-                results.add(trace);
-            }
-        } else {
-            ControlFlowGraph<?> cfg = body.getControlFlowGraph();
-
-            for (Stmt succ : cfg.successors(current)) {
-                if (prefix.contains(succ))
-                    continue;
-
-                // Case 1: Method invoke
-                // JInterfaceInvokeExpr
-                // JVirtualInvokeExpr
-                // AbstractInstanceInvokeExpr
-                Optional<AbstractInvokeExpr> succInvokeExprOpt = getInvokeExpr(succ);
-                if (succInvokeExprOpt.isPresent() && depth < MAX_CALL_DEPTH) {
-                    Set<JavaSootMethod> callees = resolveCallTargets(succInvokeExprOpt.get(), currentMethod);
-                    for (JavaSootMethod callee : callees) {
-                        // TODO
-                        // Consider circular calls.
-                        if (callee.hasBody() && !callStack.contains(callee.getSignature().toString())) {
-                            System.out.println("caller => " + current.toString());
-                            System.out.println("callee => " + callee.toString());
-                            System.out.println("succ => " + succ.toString());
-                            System.out.println("=================================");
-
-                            if (isSinkMethod(callee)) {
-                                explorePath(currentMethod, body, succ, target,
-                                            prefix, callStack, depth, rootSpec, newCost, results, idCounter);
-                                continue;
-                            }
-
-                            Body calleeBody = callee.getBody();
-                            Stmt calleeFirst = calleeBody.getStmts().get(0);
-                            Set<Stmt> calleeExits = findExitPoints(calleeBody, calleeBody.getControlFlowGraph());
-
-                            Set<String> newStack = new HashSet<>(callStack);
-                            newStack.add(callee.getSignature().toString());
-
-                            for (Stmt calleeExit : calleeExits) {
-                                // Clone prefix so far (immutable snapshot)
-                                List<Stmt> splicedPrefix = new ArrayList<>(prefix);
-                                // Phase 1: explore callee from entry to its exit, appending to splicedPrefix.
-                                explorePath(callee, calleeBody, calleeFirst, calleeExit,
-                                        splicedPrefix, newStack, depth + 1, rootSpec, newCost, results, idCounter);
-                                // Phase 2: we will start from 'succ' with the path already
-                                // containing the callee statements.
-                                // This works as long as we do not re‑enter the same call. The visited set
-                                // (prefix) will prevent looping inside the same method.
-                                explorePath(currentMethod, body, succ, target,
-                                        splicedPrefix, callStack, depth, rootSpec, newCost, results, idCounter);
-                            }
-                            // do NOT fall through to normal intra-procedural step
-                            continue;
-                        }
-                    }
-                }
-                // Case 2: normal
-                explorePath(currentMethod, body, succ, target,
-                        prefix, callStack, depth, rootSpec, newCost, results, idCounter);
-            }
-        }
-        prefix.remove(prefix.size() - 1); // backtrack
-    }
-
-    private Optional<AbstractInvokeExpr> getInvokeExpr(Stmt stmt) {
-        if (stmt instanceof JInvokeStmt) {
-            return ((JInvokeStmt) stmt).getInvokeExpr();
-        }
-        if (stmt instanceof JAssignStmt) {
-            JAssignStmt assign = (JAssignStmt) stmt;
-            if (assign.getRightOp() instanceof AbstractInvokeExpr) {
-                return Optional.of((AbstractInvokeExpr) assign.getRightOp());
-            }
-        }
-        return Optional.empty();
-    }
-
-    private boolean isSinkMethod(JavaSootMethod method) {
-        Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(method);
-        return ann.isPresent() && ann.get().isSink();
-    }
-
-    // TODO
-    // Currently doesn't exstimate the loop costs correctly.
-    // This is critical! Must be fixed.
-    private long[] statementCostInContext(Stmt stmt, Body body, SootMethod method) {
-        long loopMultiplier = 1;
-        if (isStmtInLoop(stmt, body)) {
-            loopMultiplier = UNBOUNDED_LOOP_FACTOR;
-        }
-
-        long known = 0;
-        long est = 0;
-
-        Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(stmt);
-        if (invokeExpr.isPresent()) {
-            Set<JavaSootMethod> targets = resolveCallTargets(invokeExpr.get(), method);
-            for (JavaSootMethod tgt : targets) {
-                Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(tgt);
-                if (ann.isPresent()) {
-                    known += ann.get().getMax();
-                } else {
-                    if (isBlockingCall(tgt)) {
-                        est += DEFAULT_IO_COST_MS;
-                    }
-                }
-            }
-        } else {
-            // non‑invoke: check for blocking I/O pattern
-            String s = stmt.toString().toLowerCase();
-            if (s.contains("read") || s.contains("write") || s.contains("wait") ||
-                    s.contains("network") || s.contains("database")) {
-                est += DEFAULT_IO_COST_MS;
-            }
-        }
-
-        return new long[] { known * loopMultiplier, est * loopMultiplier };
-    }
-
-    private boolean isStmtInLoop(Stmt stmt, Body body) {
-        ControlFlowGraph<?> cfg = body.getControlFlowGraph();
-        Set<Stmt> visited = new HashSet<>();
-        Deque<Stmt> stack = new ArrayDeque<>();
-
-        for (Stmt succ : cfg.successors(stmt)) {
-            if (succ.equals(stmt)) {
-                return true; // self‑loop
-            }
-            visited.clear();
-            stack.clear();
-            stack.push(succ);
-            visited.add(succ);
-            while (!stack.isEmpty()) {
-                Stmt current = stack.pop();
-                if (current.equals(stmt)) {
-                    return true; // back‑edge found
-                }
-                for (Stmt next : cfg.successors(current)) {
-                    if (!visited.contains(next)) {
-                        visited.add(next);
-                        stack.push(next);
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean isBlockingCall(SootMethod method) {
-        String sig = method.getSignature().toString().toLowerCase();
-        return sig.contains("read") || sig.contains("write") || sig.contains("wait") ||
-                sig.contains("select") || sig.contains("poll");
-    }
-
-    private String classifyRisk(long totalCost, long knownCost, long max) {
-        if (knownCost > max)
-            return "GUARANTEED_VIOLATION";
-        if (totalCost >= max)
-            return "SUSPECTED";
-        return "LOW_RISK";
-    }
-
-    private MethodTraceSet.Trace buildTrace(List<Stmt> stmts, String methodSig,
-            CostSnapshot cost, String risk, int id) {
-        MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
-        trace.setId("flow_" + id);
-        trace.setPath(stmts.stream()
-                .map(stmt -> "line "
-                        + (stmt.getPositionInfo().getStmtPosition() != null
-                                ? stmt.getPositionInfo().getStmtPosition().getFirstLine()
-                                : -1)
-                        +
-                        ": " + stmt)
-                .collect(Collectors.toList()));
-        trace.setTags(deriveTags(stmts, risk));
-        trace.setEstimatedCost(cost.total());
-        trace.setKnownCost(cost.known);
-        trace.setRiskLevel(risk);
-        return trace;
-    }
-
-    private List<String> deriveTags(List<Stmt> stmts, String risk) {
-        List<String> tags = new ArrayList<>();
-        if (risk.equals("GUARANTEED_VIOLATION"))
-            tags.add("GUARANTEED_VIOLATION");
-        else if (risk.equals("SUSPECTED"))
-            tags.add("SUSPECTED");
-        return tags;
-    }
-
-    // ─────────────────────── CALL RESOLUTION (CHA) ───────────────────────
-    private Set<JavaSootMethod> resolveCallTargets(AbstractInvokeExpr invokeExpr, SootMethod caller) {
-        MethodSignature methodSig = invokeExpr.getMethodSignature();
-
-        // static or special -> single target
-        if (invokeExpr instanceof JStaticInvokeExpr || invokeExpr instanceof JSpecialInvokeExpr) {
-            return view.getMethod(methodSig)
-                    .map(Collections::singleton)
-                    .orElse(Collections.emptySet());
-        }
-
-        // virtual / interface
-        Set<JavaSootMethod> targets = new HashSet<>();
-        JavaClassType declaringClass = (JavaClassType) methodSig.getDeclClassType();
-
-        view.getClasses().forEach(sc -> {
-            ClassType classType = sc.getType();
-            if (classType instanceof JavaClassType) {
-                JavaClassType javaClassType = (JavaClassType) classType;
-                if (isSubtype(javaClassType, declaringClass)) {
-                    sc.getMethods().stream()
-                            .filter(m -> methodSig.getSubSignature().equals(m.getSignature().getSubSignature()))
-                            .forEach(targets::add);
-                }
-            }
-        });
-        return targets;
-    }
-
-    private boolean isSubtype(JavaClassType sub, JavaClassType sup) {
-        // simple hierarchy check: view.getTypeHierarchy() may not be available in basic
-        // SootUp.
-        // For PoC we use string‑based check on class hierarchy (or load hierarchy on
-        // first use)
-        if (sub.equals(sup))
-            return true;
-        // try to get superclass
-        Optional<JavaClassType> superClass = view.getClass(sub)
-                .flatMap(sc -> sc.getSuperclass())
-                .map(sig -> view.getIdentifierFactory().getClassType(sig.getFullyQualifiedName()));
-        if (superClass.isPresent() && isSubtype(superClass.get(), sup))
-            return true;
-        // also check interfaces
-        JavaSootClass clazz = view.getClass(sub).orElse(null);
-        if (clazz != null) {
-            // getInterfaces() returns Set<? extends ClassType>, so we need to check each
-            // element
-            for (ClassType iface : clazz.getInterfaces()) {
-                // Only consider JavaClassType instances
-                if (iface instanceof JavaClassType) {
-                    if (isSubtype((JavaClassType) iface, sup))
-                        return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    // ─────────────────────── EXIT POINTS ─────────────────────────────────
-
-    private Set<Stmt> findExitPoints(Body body, ControlFlowGraph<?> cfg) {
-        Set<Stmt> exits = new HashSet<>();
-        for (Stmt stmt : body.getStmts()) {
-            if (stmt instanceof JReturnStmt || stmt instanceof JThrowStmt) {
-                exits.add(stmt);
-            } else if (stmt instanceof JInvokeStmt && cfg.outDegree(stmt) == 0) {
-                exits.add(stmt);
-            }
-        }
-        return exits;
-    }
-
-    // Inner class to hold annotation data
     private static class IOSpecAnnotation {
         private final long max;
         private final String unit;
@@ -423,7 +469,6 @@ public class TraceGenerator {
         private final String desc;
 
         public IOSpecAnnotation(AnnotationUsage annotation) {
-            // Extract values from annotation with proper type handling
             this.max = getLongValue(annotation, "max", 100L);
             this.unit = getStringValue(annotation, "unit", "ms");
             this.sink = getBooleanValue(annotation, "sink", false);
@@ -435,9 +480,8 @@ public class TraceGenerator {
             for (Map.Entry<String, Object> entry : annotation.getValues().entrySet()) {
                 if (entry.getKey().equals(key)) {
                     Object value = entry.getValue();
-                    if (value instanceof StringConstant) {
+                    if (value instanceof StringConstant)
                         return ((StringConstant) value).getValue();
-                    }
                     return value.toString();
                 }
             }
@@ -448,26 +492,21 @@ public class TraceGenerator {
             for (Map.Entry<String, Object> entry : annotation.getValues().entrySet()) {
                 if (entry.getKey().equals(key)) {
                     Object value = entry.getValue();
-                    if (value instanceof LongConstant) {
+                    if (value instanceof LongConstant)
                         return ((LongConstant) value).getValue();
-                    } else if (value instanceof Long) {
+                    if (value instanceof Long)
                         return (Long) value;
-                    } else if (value instanceof Integer) {
+                    if (value instanceof Integer)
                         return ((Integer) value).longValue();
-                    }
                 }
             }
             return defaultValue;
         }
 
         private boolean getBooleanValue(AnnotationUsage annotation, String key, boolean defaultValue) {
-            System.out.println("Annotation: " + annotation.getAnnotation().getFullyQualifiedName());
             for (Map.Entry<String, Object> entry : annotation.getValues().entrySet()) {
-                if (entry.getKey().equals(key)) {
-                    Object value = entry.getValue();
-                    if (value instanceof BooleanConstant) {
-                        return ((BooleanConstant) value).getValue();
-                    }
+                if (entry.getKey().equals(key) && entry.getValue() instanceof BooleanConstant) {
+                    return ((BooleanConstant) entry.getValue()).getValue();
                 }
             }
             return defaultValue;
