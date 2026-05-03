@@ -87,12 +87,25 @@ public class TraceGenerator {
         info.setUnit(spec.getUnit());
         info.setPercentile(spec.getPercentile());
 
-        List<MethodTraceSet.Trace> traces = extractTraces(method, body, spec);
+        List<MethodTraceSet.Trace> allTraces = exploreMethod(method, body, new HashSet<>(), 0, new HashMap<>());
+
+        List<MethodTraceSet.Trace> violatingTraces = allTraces.stream()
+                .filter(trace ->
+                // true
+                riskClassify(trace.getKnownCost(), trace.getEstimatedCost(), spec.getMax())
+                        .equals("GUARANTEED_VIOLATION"))
+                .collect(Collectors.toList());
+
+        // Assign ids
+        int id = 1;
+        for (MethodTraceSet.Trace trace : violatingTraces) {
+            trace.setId("flow_" + id++);
+        }
+
         MethodTraceSet set = new MethodTraceSet();
         set.setMethod(method.getSignature().toString());
         set.setSpec(info);
-        set.setTraces(traces);
-
+        set.setTraces(violatingTraces);
         return set;
     }
 
@@ -100,51 +113,21 @@ public class TraceGenerator {
     // Flow (trace) extraction – the corrected heart of the generator
     // ----------------------------------------------------------------------
 
-    /**
-     * Returns all execution flows (traces) of the given method that are likely
-     * to violate the performance specification.
-     */
-    private List<MethodTraceSet.Trace> extractTraces(SootMethod rootMethod,
-            Body rootBody,
-            IOSpecAnnotation rootSpec) {
-        // Compute all flows from entry to exit (with loop unrolling and inlined calls)
-        List<MethodFlow> allFlows = exploreMethod(rootMethod, rootBody,
-                new HashSet<>(), 0, new HashMap<>());
-
-        // Convert to the output format and filter by risk
-        List<MethodTraceSet.Trace> result = new ArrayList<>();
-        int id = 1;
-        for (MethodFlow flow : allFlows) {
-            String risk = classifyRisk(flow.totalCost, flow.knownCost, rootSpec.getMax());
-            // if (!risk.equals("LOW_RISK")) {
-            if (risk.equals("GUARANTEED_VIOLATION")) {
-                MethodTraceSet.Trace trace = flow.toOutputFormat(rootMethod.getSignature().toString(), risk, id++);
-                result.add(trace);
-            }
-        }
-        return result;
-    }
-
-    private List<MethodFlow> exploreMethod(SootMethod method, Body body,
+    private List<MethodTraceSet.Trace> exploreMethod(SootMethod method, Body body,
             Set<String> callStack,
             int depth,
             Map<Stmt, Integer> loopCounters) {
-        List<MethodFlow> flows = new ArrayList<>();
+        List<MethodTraceSet.Trace> traces = new ArrayList<>();
         Stmt entry = body.getStmts().get(0);
         Set<Stmt> exits = findExitPoints(body, body.getControlFlowGraph());
 
-        // DFS from the entry, building paths
+        // DFS from entry, building traces
         explorePath(method, body, entry, exits,
                 new ArrayList<>(), callStack, depth, loopCounters,
-                new CostSnapshot(0, 0), flows);
-        return flows;
+                new CostSnapshot(0, 0), traces);
+        return traces;
     }
 
-    /**
-     * Depth‑first exploration of the control flow graph, building one path at a
-     * time.
-     * When a method call is encountered, the callee's flows are inlined (spliced).
-     */
     private void explorePath(SootMethod currentMethod,
             Body body,
             Stmt current,
@@ -154,80 +137,72 @@ public class TraceGenerator {
             int depth,
             Map<Stmt, Integer> loopCounters,
             CostSnapshot costSoFar,
-            List<MethodFlow> outFlows) {
+            List<MethodTraceSet.Trace> outTraces) {
         // Append current statement to the path
         currentPath.add(current);
 
-        // Update cost (including loop multiplier if we are inside a loop)
+        // Update cost for this statement (respecting loop context)
         long[] inc = statementCostInContext(current, body, currentMethod, currentPath);
         CostSnapshot newCost = costSoFar.add(inc[0], inc[1]);
 
-        // Exit point reached ?
+        // Exit point reached -> terminal trace
         if (exitPoints.contains(current)) {
-            outFlows.add(new MethodFlow(new ArrayList<>(currentPath), newCost));
-        } else {
-            // --- Loop handling: allow back‑edges up to MAX_LOOP_UNROLL times
-            int visitCount = loopCounters.getOrDefault(current, 0);
-            if (visitCount >= MAX_LOOP_UNROLL) {
-                return;
-            }
-            Map<Stmt, Integer> newCounters = new HashMap<>(loopCounters);
-            newCounters.put(current, visitCount + 1);
+            MethodTraceSet.Trace trace = buildTrace(currentPath, newCost);
+            outTraces.add(trace);
+            currentPath.remove(currentPath.size() - 1);
+            return;
+        }
 
-            ControlFlowGraph<?> cfg = body.getControlFlowGraph();
-            // --- 1. curr is method call
-            Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(current);
-            if (invokeExpr.isPresent() && depth < MAX_CALL_DEPTH) {
-                Set<JavaSootMethod> callees = resolveCallTargets(invokeExpr.get(), currentMethod);
-                for (JavaSootMethod callee : callees) {
-                    // TODO
-                    // Avoid recursive calls
-                    // Maybe not ignore the whole thing?
-                    if (callStack.contains(callee.getSignature().toString())) {
-                        break;
-                    }
-                    // Sink methods are left as atomic steps (do not inline)
-                    if (isSinkMethod(callee)) {
-                        break;
-                    }
-                    // Inline the callee’s flows
-                    if (callee.hasBody()) {
-                        System.out.println("current => " + current.toString());
-                        System.out.println("caller => " + current.toString());
-                        System.out.println("callee => " + callee.toString());
-                        System.out.println("=================================");
+        ControlFlowGraph<?> cfg = body.getControlFlowGraph();
+        int visitCount = loopCounters.getOrDefault(current, 0);
+        if (visitCount >= MAX_LOOP_UNROLL) {
+            currentPath.remove(currentPath.size() - 1);
+            return;
+        }
+        Map<Stmt, Integer> newCounters = new HashMap<>(loopCounters);
+        newCounters.put(current, visitCount + 1);
 
-                        Set<String> newStack = new HashSet<>(callStack);
-                        newStack.add(callee.getSignature().toString());
-                        List<MethodFlow> calleeFlows = exploreMethod(callee, callee.getBody(),
-                                newStack, depth + 1, new HashMap<>());
-                        for (MethodFlow calleeFlow : calleeFlows) {
-                            List<Stmt> combined = new ArrayList<>(currentPath);
-                            combined.addAll(calleeFlow.statements);
-                            CostSnapshot combinedCost = newCost.add(calleeFlow.knownCost, calleeFlow.estCost);
+        Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(current);
+        if (invokeExpr.isPresent() && depth < MAX_CALL_DEPTH) {
+            System.out.println("here #3");
+            Set<JavaSootMethod> callees = resolveCallTargets(invokeExpr.get(), currentMethod);
+            for (JavaSootMethod callee : callees) {
+                if (callStack.contains(callee.getSignature().toString())) {
+                    break;
+                }
+                if (isSinkMethod(callee)) {
+                    break;
+                }
+                if (callee.hasBody()) {
+                    System.out.println("current => " + current.toString());
+                    System.out.println("callee => " + callee.toString());
+                    System.out.println("=================================");
+                    Set<String> newStack = new HashSet<>(callStack);
+                    newStack.add(callee.getSignature().toString());
 
-                            for (Stmt succ : cfg.successors(current)) {
-                                continueFrom(currentMethod, body, succ, exitPoints,
-                                        combined, callStack, depth, newCounters,
-                                        combinedCost, outFlows);
-                            }
+                    List<MethodTraceSet.Trace> calleeTraces = exploreMethod(callee, callee.getBody(),
+                            newStack, depth + 1, new HashMap<>());
+                    for (MethodTraceSet.Trace calleeTrace : calleeTraces) {
+                        List<Stmt> combined = new ArrayList<>(currentPath);
+                        combined.addAll(calleeTrace.path);
+                        CostSnapshot combinedCost = newCost.add(calleeTrace.knownCost, calleeTrace.estimatedCost);
+
+                        for (Stmt succ : cfg.successors(current)) {
+                            continueFrom(currentMethod, body, succ, exitPoints,
+                                    combined, callStack, depth, newCounters,
+                                    combinedCost, outTraces);
                         }
-                        break;
+
                     }
                 }
-                // After handling the call, we do NOT also fall through to the normal
-                // intra‑procedural step.
-                // continue;
-            }
-
-            // --- 2. curr is normal
-            for (Stmt succ : cfg.successors(current)) {
-                explorePath(currentMethod, body, succ, exitPoints,
-                        currentPath, callStack, depth, newCounters, newCost, outFlows);
             }
         }
 
-        // Backtrack
+        for (Stmt succ : cfg.successors(current)) {
+            explorePath(currentMethod, body, succ, exitPoints,
+                    currentPath, callStack, depth, newCounters, newCost, outTraces);
+        }
+
         currentPath.remove(currentPath.size() - 1);
     }
 
@@ -239,26 +214,13 @@ public class TraceGenerator {
             Set<Stmt> exits, List<Stmt> currentPath,
             Set<String> callStack, int depth,
             Map<Stmt, Integer> loopCounters,
-            CostSnapshot cost, List<MethodFlow> outFlows) {
-        // We simply call explorePath, but the path already contains what we have built.
-        // However, explorePath will add the start statement again. To prevent
-        // duplicates,
-        // we must temporarily remove the last element of currentPath if it equals
-        // start?
-        // Instead, we create a copy and then delegate.
+            CostSnapshot cost, List<MethodTraceSet.Trace> outTraces) {
         List<Stmt> pathCopy = new ArrayList<>(currentPath);
-        // Do not add 'start' again; it will be added by explorePath.
-        // Remove the last element if it is the same as start (which can happen if the
-        // call
-        // immediately precedes the start). This is a simplification; for a full robust
-        // solution
-        // we would need a more sophisticated state machine. For the typical N+1 example
-        // it works.
         if (!pathCopy.isEmpty() && pathCopy.get(pathCopy.size() - 1).equals(start)) {
             pathCopy.remove(pathCopy.size() - 1);
         }
         explorePath(method, body, start, exits, pathCopy,
-                callStack, depth, loopCounters, cost, outFlows);
+                callStack, depth, loopCounters, cost, outTraces);
     }
 
     // ----------------------------------------------------------------------
@@ -283,18 +245,17 @@ public class TraceGenerator {
         return ann.isPresent() && ann.get().isSink();
     }
 
-    /**
-     * Returns [knownCost, estimatedCost] for a statement, taking loop context into
-     * account.
-     * A statement is considered "inside a loop" if the current path contains a
-     * back‑edge
-     * that would force repetition. For simplicity, we compute a loop multiplier
-     * based on the number of times the statement appears in the current path.
-     */
+    private MethodTraceSet.Trace buildTrace(List<Stmt> statements, CostSnapshot cost) {
+        MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
+        trace.setPath(statements);
+        trace.setKnownCost(cost.known);
+        trace.setEstimatedCost(cost.total());
+        trace.setRiskLevel(riskClassify(cost.known, cost.estimated, -1));
+        return trace;
+    }
+
     private long[] statementCostInContext(Stmt stmt, Body body, SootMethod method, List<Stmt> currentPath) {
         long loopMultiplier = 1;
-        // Count how many times this statement already appears in the path (a simplistic
-        // loop detection)
         int occurrence = (int) currentPath.stream().filter(s -> s.equals(stmt)).count();
         if (occurrence > 1) {
             loopMultiplier = UNBOUNDED_LOOP_FACTOR; // we saw it twice => inside a loop
@@ -310,28 +271,14 @@ public class TraceGenerator {
                 Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(tgt);
                 if (ann.isPresent()) {
                     known += ann.get().getMax();
-                } else if (isBlockingCall(tgt)) {
-                    est += DEFAULT_IO_COST_MS;
                 }
-            }
-        } else {
-            String s = stmt.toString().toLowerCase();
-            if (s.contains("read") || s.contains("write") || s.contains("wait") ||
-                    s.contains("network") || s.contains("database")) {
-                est += DEFAULT_IO_COST_MS;
             }
         }
 
         return new long[] { known * loopMultiplier, est * loopMultiplier };
     }
 
-    private boolean isBlockingCall(SootMethod method) {
-        String sig = method.getSignature().toString().toLowerCase();
-        return sig.contains("read") || sig.contains("write") || sig.contains("wait") ||
-                sig.contains("select") || sig.contains("poll");
-    }
-
-    private String classifyRisk(long totalCost, long knownCost, long max) {
+    private String riskClassify(long knownCost, long totalCost, long max) {
         if (knownCost > max)
             return "GUARANTEED_VIOLATION";
         if (totalCost >= max)
@@ -397,46 +344,6 @@ public class TraceGenerator {
             }
         }
         return exits;
-    }
-
-    // ----------------------------------------------------------------------
-    // Internal data structures
-    // ----------------------------------------------------------------------
-
-    private static class MethodFlow {
-        final List<Stmt> statements;
-        final long knownCost;
-        final long estCost;
-        final long totalCost;
-
-        MethodFlow(List<Stmt> stmts, CostSnapshot cost) {
-            this.statements = new ArrayList<>(stmts);
-            this.knownCost = cost.known;
-            this.estCost = cost.estimated;
-            this.totalCost = cost.total();
-        }
-
-        MethodTraceSet.Trace toOutputFormat(String methodSig, String risk, int id) {
-            MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
-            trace.setId("flow_" + id);
-            trace.setPath(statements.stream()
-                    .map(stmt -> "line "
-                            + (stmt.getPositionInfo().getStmtPosition() != null
-                                    ? stmt.getPositionInfo().getStmtPosition().getFirstLine()
-                                    : -1)
-                            + ": " + stmt)
-                    .collect(Collectors.toList()));
-            List<String> tags = new ArrayList<>();
-            if (risk.equals("GUARANTEED_VIOLATION"))
-                tags.add("GUARANTEED_VIOLATION");
-            else if (risk.equals("SUSPECTED"))
-                tags.add("SUSPECTED");
-            trace.setTags(tags);
-            trace.setEstimatedCost(totalCost);
-            trace.setKnownCost(knownCost);
-            trace.setRiskLevel(risk);
-            return trace;
-        }
     }
 
     private static class CostSnapshot {

@@ -1,6 +1,9 @@
 package io.github.mbroughani81.flowgen;
 
 import java.util.List;
+import java.util.stream.Collectors;
+
+import sootup.core.jimple.common.stmt.Stmt;
 
 public class MethodTraceSet {
     public String method;
@@ -84,7 +87,7 @@ public class MethodTraceSet {
 
     public static class Trace {
         public String id;
-        public List<String> path;
+        public List<Stmt> path;
         public List<String> tags;
         public long estimatedCost;       // total estimated cost (known + est)
         public long knownCost;           // sum of inner @IOSpec costs
@@ -99,11 +102,11 @@ public class MethodTraceSet {
             this.id = id;
         }
 
-        public List<String> getPath() {
+        public List<Stmt> getPath() {
             return path;
         }
 
-        public void setPath(List<String> path) {
+        public void setPath(List<Stmt> path) {
             this.path = path;
         }
 
@@ -149,6 +152,14 @@ public class MethodTraceSet {
                     ", knownCost=" + knownCost +
                     ", riskLevel='" + riskLevel + '\'' +
                     '}';
+        }
+
+        public static String pathToStr(List<Stmt> path) {
+            return path.stream()
+                .map(stmt -> "line " + (stmt.getPositionInfo().getStmtPosition() != null
+                                        ? stmt.getPositionInfo().getStmtPosition().getFirstLine()
+                                        : -1) + ": " + stmt.toString())
+                .collect(Collectors.joining("\n"));
         }
     }
 }

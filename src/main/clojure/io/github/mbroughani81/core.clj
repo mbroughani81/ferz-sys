@@ -128,15 +128,17 @@
     (println (.getSignature method)))
   ;;
   (do
+    (require 'virgil)
     (import 'io.github.mbroughani81.flowgen.TraceGenerator)
+    (import 'io.github.mbroughani81.flowgen.MethodTraceSet$Trace)
     (def classpath "src/main/java/io/github/mbroughani81/demo/NPlusOne.java")
     (def generator (TraceGenerator. classpath))
     (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.AuthorService"))
-    (def trace (.getPath (first (.getTraces (first method-trace-sets)))))
-    (doseq [t trace] (println t)))
-  ;;
+    (virgil/watch-and-recompile ["src/main/java"]))
+
+;;
   (defn print-path [trace]
-    (doseq [t (.getPath trace)] (println t)))
+    (println (MethodTraceSet$Trace/pathToStr (.getPath trace))))
 
   (defn trace-diff [trace1 trace2]
     (let [path1 (.getPath trace1)
@@ -151,8 +153,8 @@
 
   (def first-set (first method-trace-sets))
   (def second-set (second method-trace-sets))
-  (def trace1 (nth (.getTraces first-set) 0))
-  (def trace2 (nth (.getTraces first-set) 1))
+  (def trace1 (nth (.getTraces second-set) 0))
+  (def trace2 (nth (.getTraces second-set) 1))
   (print-path (nth (.getTraces first-set) 0))
 
   (defn diff-trace-against-all [target-trace other-traces]

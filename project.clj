@@ -10,6 +10,7 @@
                  [com.taoensso/timbre "6.6.2"]
                  [jarohen/chime "0.3.3"]
                  [org.clojure/test.check "1.1.1"]
+                 [virgil "0.5.1"]
                  ;; Source: https://mvnrepository.com/artifact/com.clojure-goes-fast/clj-async-profiler
                  [com.clojure-goes-fast/clj-async-profiler "2.0.0-beta1"]
                  ;; Program Analysis
