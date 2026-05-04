@@ -87,7 +87,7 @@ public class TraceGenerator {
         info.setUnit(spec.getUnit());
         info.setPercentile(spec.getPercentile());
 
-        List<MethodTraceSet.Trace> allTraces = exploreMethod(method, body, new HashSet<>(), 0, new HashMap<>());
+        List<MethodTraceSet.Trace> allTraces = exploreMethod(method, body, new HashSet<>(), 0);
 
         List<MethodTraceSet.Trace> violatingTraces = allTraces.stream()
                 .filter(trace ->
@@ -115,15 +115,14 @@ public class TraceGenerator {
 
     private List<MethodTraceSet.Trace> exploreMethod(SootMethod method, Body body,
             Set<String> callStack,
-            int depth,
-            Map<Stmt, Integer> loopCounters) {
+            int depth) {
         List<MethodTraceSet.Trace> traces = new ArrayList<>();
         Stmt entry = body.getStmts().get(0);
         Set<Stmt> exits = findExitPoints(body, body.getControlFlowGraph());
 
         // DFS from entry, building traces
         explorePath(method, body, entry, exits,
-                new ArrayList<>(), callStack, depth, loopCounters,
+                new ArrayList<>(), callStack, depth, new HashMap<>(),
                 new CostSnapshot(0, 0), traces);
         return traces;
     }
@@ -135,92 +134,80 @@ public class TraceGenerator {
             List<Stmt> currentPath,
             Set<String> callStack,
             int depth,
-            Map<Stmt, Integer> loopCounters,
-            CostSnapshot costSoFar,
+            Map<Stmt, Integer> loopCounter,
+            CostSnapshot cost,
             List<MethodTraceSet.Trace> outTraces) {
-        // Append current statement to the path
+        // add to currentPath
         currentPath.add(current);
-
-        // Update cost for this statement (respecting loop context)
+        // Update cost
         long[] inc = statementCostInContext(current, body, currentMethod, currentPath);
-        CostSnapshot newCost = costSoFar.add(inc[0], inc[1]);
+        cost = cost.add(inc[0], inc[1]);
 
         // Exit point reached -> terminal trace
         if (exitPoints.contains(current)) {
-            MethodTraceSet.Trace trace = buildTrace(currentPath, newCost);
+            MethodTraceSet.Trace trace = buildTrace(currentPath, cost);
             outTraces.add(trace);
+
             currentPath.remove(currentPath.size() - 1);
             return;
-        }
+        } else {
+            ControlFlowGraph<?> cfg = body.getControlFlowGraph();
+            int visitCount = loopCounter.getOrDefault(current, 0);
+            // IMMIDIATE EXIT
+            // TODO
+            // I don't like this...
+            if (visitCount >= MAX_LOOP_UNROLL) {
+                currentPath.remove(currentPath.size() - 1);
+                return;
+            }
+            // Update loopCounter. DO NOT MOVE!!!
+            loopCounter.put(current, loopCounter.getOrDefault(current, 0) + 1);
 
-        ControlFlowGraph<?> cfg = body.getControlFlowGraph();
-        int visitCount = loopCounters.getOrDefault(current, 0);
-        if (visitCount >= MAX_LOOP_UNROLL) {
-            currentPath.remove(currentPath.size() - 1);
-            return;
-        }
-        Map<Stmt, Integer> newCounters = new HashMap<>(loopCounters);
-        newCounters.put(current, visitCount + 1);
-
-        Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(current);
-        if (invokeExpr.isPresent() && depth < MAX_CALL_DEPTH) {
-            System.out.println("here #3");
-            Set<JavaSootMethod> callees = resolveCallTargets(invokeExpr.get(), currentMethod);
-            for (JavaSootMethod callee : callees) {
-                if (callStack.contains(callee.getSignature().toString())) {
-                    break;
-                }
-                if (isSinkMethod(callee)) {
-                    break;
-                }
-                if (callee.hasBody()) {
-                    System.out.println("current => " + current.toString());
-                    System.out.println("callee => " + callee.toString());
-                    System.out.println("=================================");
-                    Set<String> newStack = new HashSet<>(callStack);
-                    newStack.add(callee.getSignature().toString());
-
-                    List<MethodTraceSet.Trace> calleeTraces = exploreMethod(callee, callee.getBody(),
-                            newStack, depth + 1, new HashMap<>());
-                    for (MethodTraceSet.Trace calleeTrace : calleeTraces) {
-                        List<Stmt> combined = new ArrayList<>(currentPath);
-                        combined.addAll(calleeTrace.path);
-                        CostSnapshot combinedCost = newCost.add(calleeTrace.knownCost, calleeTrace.estimatedCost);
-
-                        for (Stmt succ : cfg.successors(current)) {
-                            continueFrom(currentMethod, body, succ, exitPoints,
-                                    combined, callStack, depth, newCounters,
-                                    combinedCost, outTraces);
+            Optional<AbstractInvokeExpr> invokeExpr = getInvokeExpr(current);
+            if (invokeExpr.isPresent() && depth < MAX_CALL_DEPTH) {
+                Set<JavaSootMethod> callees = resolveCallTargets(invokeExpr.get(), currentMethod);
+                for (JavaSootMethod callee : callees) {
+                    if (callStack.contains(callee.getSignature().toString())) {
+                        break;
+                    }
+                    if (isSinkMethod(callee)) {
+                        break;
+                    }
+                    if (callee.hasBody()) {
+                        Set<String> newStack = new HashSet<>(callStack);
+                        newStack.add(callee.getSignature().toString());
+                        List<MethodTraceSet.Trace> calleeTraces = exploreMethod(callee,
+                                callee.getBody(),
+                                newStack,
+                                depth + 1);
+                        for (MethodTraceSet.Trace calleeTrace : calleeTraces) {
+                            List<Stmt> combined = new ArrayList<>(currentPath);
+                            combined.addAll(calleeTrace.path);
+                            CostSnapshot newCost = cost.add(calleeTrace.knownCost, calleeTrace.estimatedCost);
+                            for (Stmt succ : cfg.successors(current)) {
+                                HashMap<Stmt, Integer> newLoopCounter = new HashMap<>(loopCounter);
+                                explorePath(currentMethod, body, succ, exitPoints,
+                                        combined, callStack, depth, newLoopCounter, newCost, outTraces);
+                            }
                         }
-
+                        // TODO check if can be deleted
+                        if (calleeTraces.size() > 0) {
+                            currentPath.remove(currentPath.size() - 1);
+                            return;
+                        }
                     }
                 }
             }
+
+            for (Stmt succ : cfg.successors(current)) {
+                HashMap<Stmt, Integer> newLoopCounter = new HashMap<>(loopCounter);
+                explorePath(currentMethod, body, succ, exitPoints,
+                        currentPath, callStack, depth, newLoopCounter, cost, outTraces);
+            }
         }
 
-        for (Stmt succ : cfg.successors(current)) {
-            explorePath(currentMethod, body, succ, exitPoints,
-                    currentPath, callStack, depth, newCounters, newCost, outTraces);
-        }
-
+        // reset currentPath
         currentPath.remove(currentPath.size() - 1);
-    }
-
-    /**
-     * Helper to continue exploration from a given statement, using a pre‑built path
-     * and a pre‑computed cost. Avoids code duplication.
-     */
-    private void continueFrom(SootMethod method, Body body, Stmt start,
-            Set<Stmt> exits, List<Stmt> currentPath,
-            Set<String> callStack, int depth,
-            Map<Stmt, Integer> loopCounters,
-            CostSnapshot cost, List<MethodTraceSet.Trace> outTraces) {
-        List<Stmt> pathCopy = new ArrayList<>(currentPath);
-        if (!pathCopy.isEmpty() && pathCopy.get(pathCopy.size() - 1).equals(start)) {
-            pathCopy.remove(pathCopy.size() - 1);
-        }
-        explorePath(method, body, start, exits, pathCopy,
-                callStack, depth, loopCounters, cost, outTraces);
     }
 
     // ----------------------------------------------------------------------
@@ -247,7 +234,7 @@ public class TraceGenerator {
 
     private MethodTraceSet.Trace buildTrace(List<Stmt> statements, CostSnapshot cost) {
         MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
-        trace.setPath(statements);
+        trace.setPath(new ArrayList<>(statements));
         trace.setKnownCost(cost.known);
         trace.setEstimatedCost(cost.total());
         trace.setRiskLevel(riskClassify(cost.known, cost.estimated, -1));

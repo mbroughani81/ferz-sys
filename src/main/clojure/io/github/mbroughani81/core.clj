@@ -128,41 +128,41 @@
     (println (.getSignature method)))
   ;;
   (do
-    (require 'virgil)
+    ;; (require 'virgil)
+    (require 'clojure.string)
     (import 'io.github.mbroughani81.flowgen.TraceGenerator)
     (import 'io.github.mbroughani81.flowgen.MethodTraceSet$Trace)
-    (def classpath "src/main/java/io/github/mbroughani81/demo/NPlusOne.java")
+    (def classpath "src/main/java/io/github/mbroughani81/demo/DemoOne.java")
     (def generator (TraceGenerator. classpath))
-    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.AuthorService"))
-    (virgil/watch-and-recompile ["src/main/java"]))
+    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.EntityService"))
+    ;; (virgil/watch-and-recompile ["src/main/java"])
+    (defn print-path [trace]
+      (println (MethodTraceSet$Trace/pathToStr (.getPath trace))))
+    (defn find-first-path-diff [trace1 trace2]
+      (let [path-str1 (MethodTraceSet$Trace/pathToStr (.getPath trace1))
+            path-str2 (MethodTraceSet$Trace/pathToStr (.getPath trace2))
+            lines1 (clojure.string/split-lines path-str1)
+            lines2 (clojure.string/split-lines path-str2)
+            max-lines (max (count lines1) (count lines2))]
+        (loop [i 0]
+          (when (< i max-lines)
+            (let [line1 (if (< i (count lines1)) (nth lines1 i) "<END OF TRACE 1>")
+                  line2 (if (< i (count lines2)) (nth lines2 i) "<END OF TRACE 2>")]
+              (if (not= line1 line2)
+                (do
+                  (println "First difference at line" (inc i) ":")
+                  (println "Trace1:" line1)
+                  (println "Trace2:" line2))
+                (recur (inc i))))))))
+    (def first-set (first method-trace-sets))
+    (def second-set (second method-trace-sets))
+    ;;
+    )
+
+  (print-path (nth (.getTraces second-set) 0))
+
+  (find-first-path-diff (nth (.getTraces second-set) 0)
+                        (nth (.getTraces second-set) 1))
 
 ;;
-  (defn print-path [trace]
-    (println (MethodTraceSet$Trace/pathToStr (.getPath trace))))
-
-  (defn trace-diff [trace1 trace2]
-    (let [path1 (.getPath trace1)
-          path2 (.getPath trace2)]
-      (if (= path1 path2)
-        (println "Traces are identical.")
-        (let [pairs (map vector path1 path2)
-              first-diff (first (filter (fn [[a b]] (not= a b)) pairs))]
-          (println "Traces differ. First difference at index" (count (take-while (fn [[a b]] (= a b)) pairs)) ":")
-          (println "  Trace1 line:" (first first-diff))
-          (println "  Trace2 line:" (second first-diff))))))
-
-  (def first-set (first method-trace-sets))
-  (def second-set (second method-trace-sets))
-  (def trace1 (nth (.getTraces second-set) 0))
-  (def trace2 (nth (.getTraces second-set) 1))
-  (print-path (nth (.getTraces first-set) 0))
-
-  (defn diff-trace-against-all [target-trace other-traces]
-    (doseq [t other-traces]
-      (println "Comparing with trace:" (.getId t))
-      (trace-diff target-trace t)
-      (println "---")))
-  (diff-trace-against-all trace1 (rest (.getTraces first-set)))
-
-  ;;
   )
