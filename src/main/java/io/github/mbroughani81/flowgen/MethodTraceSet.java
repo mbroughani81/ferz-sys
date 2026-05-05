@@ -90,7 +90,7 @@ public class MethodTraceSet {
         public List<Stmt> path;
         public List<String> tags;
         public long estimatedCost;       // total estimated cost (known + est)
-        public long knownCost;           // sum of inner @IOSpec costs
+        public long knownCost;           // sum of inner @MSpec costs
         public String riskLevel;         // GUARANTEED_VIOLATION, SUSPECTED, LOW_RISK
 
         // Getters and Setters for Trace fields

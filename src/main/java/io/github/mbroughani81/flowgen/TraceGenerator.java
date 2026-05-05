@@ -54,7 +54,7 @@ public class TraceGenerator {
 
         JavaSootClass sootClass = view.getClass(classType).get();
         for (JavaSootMethod method : sootClass.getMethods()) {
-            Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(method);
+            Optional<MSpecAnnotation> ann = extractMSpecAnnotation(method);
             if (ann.isPresent() && method.hasBody()) {
                 MethodTraceSet set = analyzeMethod(method, method.getBody(), ann.get());
                 results.add(set);
@@ -67,10 +67,10 @@ public class TraceGenerator {
     // Annotation extraction
     // ----------------------------------------------------------------------
 
-    private Optional<IOSpecAnnotation> extractIOSpecAnnotation(JavaSootMethod method) {
+    private Optional<MSpecAnnotation> extractMSpecAnnotation(JavaSootMethod method) {
         for (AnnotationUsage ann : method.getAnnotations()) {
-            if (ann.getAnnotation().getFullyQualifiedName().equals("io.github.mbroughani81.perfspec.IOSpec")) {
-                return Optional.of(new IOSpecAnnotation(ann));
+            if (ann.getAnnotation().getFullyQualifiedName().equals("io.github.mbroughani81.perfspec.MSpec")) {
+                return Optional.of(new MSpecAnnotation(ann));
             }
         }
         return Optional.empty();
@@ -80,7 +80,7 @@ public class TraceGenerator {
     // Main analysis of a single method
     // ----------------------------------------------------------------------
 
-    private MethodTraceSet analyzeMethod(SootMethod method, Body body, IOSpecAnnotation spec) {
+    private MethodTraceSet analyzeMethod(SootMethod method, Body body, MSpecAnnotation spec) {
         MethodTraceSet.SpecInfo info = new MethodTraceSet.SpecInfo();
         info.setType("IO");
         info.setMax(spec.getMax());
@@ -228,7 +228,7 @@ public class TraceGenerator {
     }
 
     private boolean isSinkMethod(JavaSootMethod method) {
-        Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(method);
+        Optional<MSpecAnnotation> ann = extractMSpecAnnotation(method);
         return ann.isPresent() && ann.get().isSink();
     }
 
@@ -255,7 +255,7 @@ public class TraceGenerator {
         if (invokeExpr.isPresent()) {
             Set<JavaSootMethod> targets = resolveCallTargets(invokeExpr.get(), method);
             for (JavaSootMethod tgt : targets) {
-                Optional<IOSpecAnnotation> ann = extractIOSpecAnnotation(tgt);
+                Optional<MSpecAnnotation> ann = extractMSpecAnnotation(tgt);
                 if (ann.isPresent()) {
                     known += ann.get().getMax();
                 }
@@ -352,17 +352,17 @@ public class TraceGenerator {
     }
 
     // ----------------------------------------------------------------------
-    // Inner class for IOSpec annotation data
+    // Inner class for MSpec annotation data
     // ----------------------------------------------------------------------
 
-    private static class IOSpecAnnotation {
+    private static class MSpecAnnotation {
         private final long max;
         private final String unit;
         private final boolean sink;
         private final int percentile;
         private final String desc;
 
-        public IOSpecAnnotation(AnnotationUsage annotation) {
+        public MSpecAnnotation(AnnotationUsage annotation) {
             this.max = getLongValue(annotation, "max", 100L);
             this.unit = getStringValue(annotation, "unit", "ms");
             this.sink = getBooleanValue(annotation, "sink", false);
