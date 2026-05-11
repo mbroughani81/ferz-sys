@@ -3,6 +3,7 @@ package io.github.mbroughani81.demo;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import io.github.mbroughani81.perfspec.MSpec;
+import io.github.mbroughani81.perfspec.MSpec.SpecMode;
 
 /* -------------------- core abstractions -------------------- */
 
@@ -92,7 +93,7 @@ class MemoryBasedDataProvider implements DataAccessProvider {
 
     @Override
     @SuppressWarnings("unchecked")
-    @MSpec(max = 10, unit = TimeUnit.MILLISECONDS, sink = true, percentile = 100, desc = "Data access")
+    @MSpec(mode = SpecMode.LATENCY, max = 10, sink = true, desc = "Aggregate details")
     public <T> List<T> query(String sql, Object[] params, Class<T> resultType) {
         String trimmedSql = sql.trim().toLowerCase();
 
@@ -127,7 +128,7 @@ class EntityService {
         this.provider = provider;
     }
 
-    @MSpec(max = 100, unit = TimeUnit.MILLISECONDS, percentile = 100, desc = "Aggregate details")
+    @MSpec(mode = SpecMode.LATENCY, max = 100, desc = "Aggregate details")
     public List<AuthorWithBooks> retrieveAggregated() {
         List<Author> allAuthors = provider.query("SELECT * FROM author", new Object[]{}, Author.class);
         List<AuthorWithBooks> result = new ArrayList<>();
@@ -141,7 +142,7 @@ class EntityService {
         return result;
     }
 
-    @MSpec(max = 100, unit = TimeUnit.MILLISECONDS, percentile = 100, desc = "Aggregate details (optimised)")
+    @MSpec(mode = SpecMode.LATENCY, max = 100, desc = "Aggregate details (optimised)")
     public List<AuthorWithBooks> retrieveAggregatedBulk() {
         List<Author> allAuthors = provider.query("SELECT * FROM author", new Object[]{}, Author.class);
         List<Book> allBooks = provider.query("SELECT * FROM book", new Object[]{}, Book.class);

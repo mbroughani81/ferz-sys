@@ -4,14 +4,20 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
-import java.util.concurrent.TimeUnit;
 
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD, ElementType.CONSTRUCTOR })
+@Target(ElementType.METHOD)
 public @interface MSpec {
-    long max();
+    public enum SpecMode {
+        LATENCY, // exact max must be respected
+        SQUEEZE // no fixed max; squeeze out any avoidable latency
+    }
 
-    TimeUnit unit() default TimeUnit.MILLISECONDS;
+    SpecMode mode() default SpecMode.LATENCY; // NEW
+
+    long max() default Long.MAX_VALUE;
+
+    String unit() default "MILLISECONDS";
 
     boolean sink() default false;
 

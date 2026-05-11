@@ -16,6 +16,8 @@ import sootup.java.core.types.JavaClassType;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+import io.github.mbroughani81.perfspec.MSpec.SpecMode;
+
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -81,12 +83,6 @@ public class TraceGenerator {
     // ----------------------------------------------------------------------
 
     private MethodTraceSet analyzeMethod(SootMethod method, Body body, MSpecAnnotation spec) {
-        MethodTraceSet.SpecInfo info = new MethodTraceSet.SpecInfo();
-        info.setType("IO");
-        info.setMax(spec.getMax());
-        info.setUnit(spec.getUnit());
-        info.setPercentile(spec.getPercentile());
-
         List<MethodTraceSet.Trace> allTraces = exploreMethod(method, body, new HashSet<>(), 0);
 
         List<MethodTraceSet.Trace> violatingTraces = allTraces.stream()
@@ -104,7 +100,6 @@ public class TraceGenerator {
 
         MethodTraceSet set = new MethodTraceSet();
         set.setMethod(method.getSignature().toString());
-        set.setSpec(info);
         set.setTraces(violatingTraces);
         return set;
     }
@@ -361,6 +356,7 @@ public class TraceGenerator {
         private final boolean sink;
         private final int percentile;
         private final String desc;
+        private final SpecMode mode;
 
         public MSpecAnnotation(AnnotationUsage annotation) {
             this.max = getLongValue(annotation, "max", 100L);
@@ -368,6 +364,7 @@ public class TraceGenerator {
             this.sink = getBooleanValue(annotation, "sink", false);
             this.percentile = 100;
             this.desc = getStringValue(annotation, "desc", "");
+            this.mode = getEnumValue(annotation, "mode", SpecMode.LATENCY);
         }
 
         private String getStringValue(AnnotationUsage annotation, String key, String defaultValue) {
@@ -406,6 +403,25 @@ public class TraceGenerator {
             return defaultValue;
         }
 
+        private SpecMode getEnumValue(AnnotationUsage annotation, String key, SpecMode defaultValue) {
+            for (Map.Entry<String, Object> entry : annotation.getValues().entrySet()) {
+                if (entry.getKey().equals(key)) {
+                    Object value = entry.getValue();
+                    if (value instanceof StringConstant) {
+                        String literal = ((StringConstant) value).getValue();
+                        try {
+                            return SpecMode.valueOf(literal);
+                        } catch (IllegalArgumentException e) {
+                        }
+                    }
+                    if (value instanceof SpecMode) {
+                        return (SpecMode) value;
+                    }
+                }
+            }
+            return defaultValue;
+        }
+
         public long getMax() {
             return max;
         }
@@ -424,6 +440,10 @@ public class TraceGenerator {
 
         public String getDesc() {
             return desc;
+        }
+
+        public SpecMode getMode() {
+            return mode;
         }
     }
 }

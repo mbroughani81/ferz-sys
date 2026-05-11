@@ -159,7 +159,7 @@
     ;;
     )
 
-  (print-path (nth (.getTraces second-set) 0))
+  (print-path (nth (.getTraces first-set) 1))
 
   (find-first-path-diff (nth (.getTraces second-set) 0)
                         (nth (.getTraces second-set) 1))

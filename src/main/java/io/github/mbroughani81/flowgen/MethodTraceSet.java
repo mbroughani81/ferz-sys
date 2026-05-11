@@ -7,7 +7,6 @@ import sootup.core.jimple.common.stmt.Stmt;
 
 public class MethodTraceSet {
     public String method;
-    public SpecInfo spec;
     public List<Trace> traces;
 
     // Getters and Setters for MethodTraceSet fields
@@ -19,70 +18,12 @@ public class MethodTraceSet {
         this.method = method;
     }
 
-    public SpecInfo getSpec() {
-        return spec;
-    }
-
-    public void setSpec(SpecInfo spec) {
-        this.spec = spec;
-    }
-
     public List<Trace> getTraces() {
         return traces;
     }
 
     public void setTraces(List<Trace> traces) {
         this.traces = traces;
-    }
-
-    public static class SpecInfo {
-        public String type;
-        public long max;
-        public String unit;
-        public int percentile;
-
-        // Getters and Setters for SpecInfo fields
-        public String getType() {
-            return type;
-        }
-
-        public void setType(String type) {
-            this.type = type;
-        }
-
-        public long getMax() {
-            return max;
-        }
-
-        public void setMax(long max) {
-            this.max = max;
-        }
-
-        public String getUnit() {
-            return unit;
-        }
-
-        public void setUnit(String unit) {
-            this.unit = unit;
-        }
-
-        public int getPercentile() {
-            return percentile;
-        }
-
-        public void setPercentile(int percentile) {
-            this.percentile = percentile;
-        }
-
-        @Override
-        public String toString() {
-            return "SpecInfo{" +
-                    "type='" + type + '\'' +
-                    ", max=" + max +
-                    ", unit='" + unit + '\'' +
-                    ", percentile=" + percentile +
-                    '}';
-        }
     }
 
     public static class Trace {
