@@ -132,9 +132,10 @@
     (require 'clojure.string)
     (import 'io.github.mbroughani81.flowgen.TraceGenerator)
     (import 'io.github.mbroughani81.flowgen.MethodTraceSet$Trace)
-    (def classpath "src/main/java/io/github/mbroughani81/demo/DemoOne.java")
-    (def generator (TraceGenerator. classpath))
-    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.EntityService"))
+    ;;
+    )
+
+  (do
     ;; (virgil/watch-and-recompile ["src/main/java"])
     (defn print-path [trace]
       (println (MethodTraceSet$Trace/pathToStr (.getPath trace))))
@@ -154,15 +155,43 @@
                   (println "Trace1:" line1)
                   (println "Trace2:" line2))
                 (recur (inc i))))))))
-    (def first-set (first method-trace-sets))
-    (def second-set (second method-trace-sets))
     ;;
     )
 
-  (print-path (nth (.getTraces first-set) 1))
+  (print-path (nth (.getTraces second-set) 0))
 
   (find-first-path-diff (nth (.getTraces second-set) 0)
                         (nth (.getTraces second-set) 1))
+
+  (do
+    (println "method-trace-set count " (count method-trace-sets))
+    (println "first-set method " (.getMethod first-set))
+    (println "first-set count" (count (.getTraces first-set)))
+    (println "second-set method " (.getMethod second-set))
+    (println "second-set count" (count (.getTraces second-set)))
+;;
+    )
+
+  (do
+    (def classpath "src/main/java/io/github/mbroughani81/demo/DemoOne.java")
+    (def generator (TraceGenerator. classpath))
+    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.EntityService"))
+    (def first-set (first method-trace-sets))
+    (def second-set (second method-trace-sets)))
+
+  (do
+    (def classpath "src/main/java/io/github/mbroughani81/demo/DemoTwo.java")
+    (def generator (TraceGenerator. classpath))
+    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.DemoTwo"))
+    (def first-set (first method-trace-sets))
+    (def second-set (second method-trace-sets)))
+
+  (do
+    (def classpath "src/main/java/io/github/mbroughani81/demo/DemoThree.java")
+    (def generator (TraceGenerator. classpath))
+    (def method-trace-sets (.analyzeClass generator "io.github.mbroughani81.demo.DemoThree"))
+    (def first-set (first method-trace-sets))
+    (def second-set (second method-trace-sets)))
 
 ;;
   )

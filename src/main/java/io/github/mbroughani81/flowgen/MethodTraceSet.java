@@ -32,7 +32,6 @@ public class MethodTraceSet {
         public List<String> tags;
         public long estimatedCost;       // total estimated cost (known + est)
         public long knownCost;           // sum of inner @MSpec costs
-        public String riskLevel;         // GUARANTEED_VIOLATION, SUSPECTED, LOW_RISK
 
         // Getters and Setters for Trace fields
         public String getId() {
@@ -75,14 +74,6 @@ public class MethodTraceSet {
             this.knownCost = knownCost;
         }
 
-        public String getRiskLevel() {
-            return riskLevel;
-        }
-
-        public void setRiskLevel(String riskLevel) {
-            this.riskLevel = riskLevel;
-        }
-
         @Override
         public String toString() {
             return "Trace{" +
@@ -91,7 +82,6 @@ public class MethodTraceSet {
                     ", tags=" + tags +
                     ", estimatedCost=" + estimatedCost +
                     ", knownCost=" + knownCost +
-                    ", riskLevel='" + riskLevel + '\'' +
                     '}';
         }
 

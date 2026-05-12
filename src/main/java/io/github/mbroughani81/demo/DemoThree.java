@@ -1,45 +1,46 @@
-// package io.github.mbroughani81.demo;
+package io.github.mbroughani81.demo;
 
-// import io.github.mbroughani81.perfspec.MSpec;
-// import java.util.concurrent.TimeUnit;
+import io.github.mbroughani81.perfspec.MSpec;
+import io.github.mbroughani81.perfspec.MSpec.SpecMode;
 
-// class HeavyLogger {
-//     @MSpec(max = 100, unit = TimeUnit.MILLISECONDS, sink = true, percentile = 100, desc = "Logger initialisation")
-//     public HeavyLogger() {
-//         // Expensive real-world: traverse stack trace
-//         try {
-//             Thread.sleep(80);
-//         } catch (InterruptedException ignored) {
-//         }
-//     }
+class HeavyLogger {
 
-//     public void info(String msg) {
-//         /* cheap */
-//     }
-// }
+    @MSpec(mode = SpecMode.LATENCY, max = 1, sink = true, desc = "Creating heavy object")
+    public HeavyLogger() {
+        // Expensive real-world: traverse stack trace
+        try {
+            Thread.sleep(80);
+        } catch (InterruptedException ignored) {
+        }
+    }
 
-// public class DemoThree {
+    public void info(String msg) {
+        /* cheap */
+    }
+}
 
-//     private static final HeavyLogger LOGGER = new HeavyLogger(); // created once
+public class DemoThree {
 
-//     private void doActualWork() {
-//         /* cheap */
-//     }
+    private static final HeavyLogger LOGGER = new HeavyLogger(); // created once
 
-//     @MSpec(max = 10, unit = TimeUnit.MILLISECONDS, percentile = 100, desc = "Buggy service method – creates many heavy loggers")
-//     public void processBuggy() {
-//         for (int i = 0; i < 100; i++) {
-//             HeavyLogger logger = new HeavyLogger();
-//             doActualWork();
-//             logger.info("done");
-//         }
-//     }
+    private void doActualWork() {
+        /* cheap */
+    }
 
-//     @MSpec(max = 10, unit = TimeUnit.MILLISECONDS, percentile = 100, desc = "Fixed service method – reuses static logger")
-//     public void processFixed() {
-//         for (int i = 0; i < 100; i++) {
-//             doActualWork();
-//             LOGGER.info("done");
-//         }
-//     }
-// }
+    @MSpec(mode = SpecMode.SQUEEZE, desc = "Buggy service method – creates many loggers")
+    public void processBuggy() {
+        for (int i = 0; i < 100; i++) {
+            HeavyLogger logger = new HeavyLogger();
+            doActualWork();
+            logger.info("done");
+        }
+    }
+
+    @MSpec(mode = SpecMode.SQUEEZE, desc = "Fixed service method – uses static logger")
+    public void processFixed() {
+        for (int i = 0; i < 100; i++) {
+            doActualWork();
+            LOGGER.info("done");
+        }
+    }
+}

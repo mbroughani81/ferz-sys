@@ -4,12 +4,14 @@ import sootup.core.inputlocation.AnalysisInputLocation;
 import sootup.java.bytecode.frontend.inputlocation.OTFCompileAnalysisInputLocation;
 import sootup.core.graph.ControlFlowGraph;
 import sootup.core.jimple.common.stmt.*;
+import sootup.core.jimple.common.Value;
 import sootup.core.jimple.common.constant.*;
 import sootup.core.jimple.common.expr.*;
 import sootup.core.model.*;
 import sootup.core.signatures.MethodSignature;
 import sootup.core.types.ClassType;
 import sootup.java.core.*;
+import sootup.java.core.jimple.basic.JavaLocal;
 import sootup.java.core.views.JavaView;
 import sootup.java.core.types.JavaClassType;
 
@@ -85,12 +87,18 @@ public class TraceGenerator {
     private MethodTraceSet analyzeMethod(SootMethod method, Body body, MSpecAnnotation spec) {
         List<MethodTraceSet.Trace> allTraces = exploreMethod(method, body, new HashSet<>(), 0);
 
-        List<MethodTraceSet.Trace> violatingTraces = allTraces.stream()
-                .filter(trace ->
-                // true
-                riskClassify(trace.getKnownCost(), trace.getEstimatedCost(), spec.getMax())
-                        .equals("GUARANTEED_VIOLATION"))
-                .collect(Collectors.toList());
+        List<MethodTraceSet.Trace> violatingTraces;
+        if (spec.getMode() == SpecMode.LATENCY) {
+            violatingTraces = allTraces.stream()
+                    .filter(trace -> riskClassify(trace.getKnownCost(), trace.getEstimatedCost(), spec.getMax())
+                            .equals("GUARANTEED_VIOLATION"))
+                    .collect(Collectors.toList());
+
+        } else {
+            // In SQUEEZE mode, any trace is a violation.
+            violatingTraces = allTraces.stream()
+                    .collect(Collectors.toList());
+        }
 
         // Assign ids
         int id = 1;
@@ -137,6 +145,27 @@ public class TraceGenerator {
         // Update cost
         long[] inc = statementCostInContext(current, body, currentMethod, currentPath);
         cost = cost.add(inc[0], inc[1]);
+        boolean isLoopIteration = loopCounter.getOrDefault(current, 0) >= 1;
+        // expensivev call : having non-zero known latency OR being bad op
+        boolean isExpensiveCall = inc[0] > 0 || isBadOperation(current);
+        if (isLoopIteration && isExpensiveCall) {
+            cost = cost.markWasteful();
+        }
+
+        // Check skips
+        if (current instanceof JIfStmt && isIfControlledBySkip((JIfStmt) current, currentMethod, body)) {
+            // Only follow the false branch; skip the true branch entirely.
+            JIfStmt ifStmt = (JIfStmt) current;
+            List<Stmt> targets = ifStmt.getTargetStmts(body);
+            if (targets.size() >= 2) {
+                Stmt falseTarget = targets.get(0); // FALSE_BRANCH_IDX
+                HashMap<Stmt, Integer> newLoopCounter = new HashMap<>(loopCounter);
+                explorePath(currentMethod, body, falseTarget, exitPoints,
+                        currentPath, callStack, depth, newLoopCounter, cost, outTraces);
+            }
+            currentPath.remove(currentPath.size() - 1);
+            return; // prevent normal successor handling
+        }
 
         // Exit point reached -> terminal trace
         if (exitPoints.contains(current)) {
@@ -227,12 +256,63 @@ public class TraceGenerator {
         return ann.isPresent() && ann.get().isSink();
     }
 
+    private boolean isIfControlledBySkip(JIfStmt ifStmt, SootMethod currentMethod, Body body) {
+        AbstractConditionExpr cond = ifStmt.getCondition();
+        JavaLocal local = null;
+        if (cond.getOp1() instanceof JavaLocal) {
+            local = (JavaLocal) cond.getOp1();
+        } else if (cond.getOp2() instanceof JavaLocal) {
+            local = (JavaLocal) cond.getOp2();
+        }
+        if (local == null)
+            return false;
+
+        // Scan the method body **backwards** from the position of the if statement
+        List<Stmt> stmts = body.getStmts();
+        int ifIdx = stmts.indexOf(ifStmt);
+        if (ifIdx < 0)
+            return false;
+
+        for (int i = ifIdx - 1; i >= 0; i--) {
+            Stmt prev = stmts.get(i);
+            // Look for an assignment to our local
+            if (prev instanceof JAssignStmt) {
+                JAssignStmt assign = (JAssignStmt) prev;
+                if (assign.getLeftOp().equals(local)) {
+                    // Found the definition
+                    Value rhs = assign.getRightOp();
+                    if (rhs instanceof AbstractInvokeExpr) {
+                        AbstractInvokeExpr invExpr = (AbstractInvokeExpr) rhs;
+                        Set<JavaSootMethod> targets = resolveCallTargets(invExpr, currentMethod);
+                        for (JavaSootMethod tgt : targets) {
+                            if (hasSkipAnnotation(tgt))
+                                return true;
+                        }
+                    }
+                    // once we’ve found the definition we can stop
+                    break;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasSkipAnnotation(JavaSootMethod method) {
+        for (AnnotationUsage ann : method.getAnnotations()) {
+            if (ann.getAnnotation()
+                    .getFullyQualifiedName()
+                    .equals("io.github.mbroughani81.perfspec.Skip")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private MethodTraceSet.Trace buildTrace(List<Stmt> statements, CostSnapshot cost) {
         MethodTraceSet.Trace trace = new MethodTraceSet.Trace();
         trace.setPath(new ArrayList<>(statements));
         trace.setKnownCost(cost.known);
         trace.setEstimatedCost(cost.total());
-        trace.setRiskLevel(riskClassify(cost.known, cost.estimated, -1));
         return trace;
     }
 
@@ -258,6 +338,18 @@ public class TraceGenerator {
         }
 
         return new long[] { known * loopMultiplier, est * loopMultiplier };
+    }
+
+    private static final Set<String> HEAVY_OPS = Set.of(
+            "java.lang.Throwable.getStackTrace",
+            "java.lang.Thread.dumpStack");
+
+    private boolean isBadOperation(Stmt stmt) {
+        Optional<AbstractInvokeExpr> invoke = getInvokeExpr(stmt);
+        if (invoke.isEmpty())
+            return false;
+        MethodSignature sig = invoke.get().getMethodSignature();
+        return HEAVY_OPS.contains(sig.toString());
     }
 
     private String riskClassify(long knownCost, long totalCost, long max) {
@@ -319,7 +411,7 @@ public class TraceGenerator {
     private Set<Stmt> findExitPoints(Body body, ControlFlowGraph<?> cfg) {
         Set<Stmt> exits = new HashSet<>();
         for (Stmt stmt : body.getStmts()) {
-            if (stmt instanceof JReturnStmt || stmt instanceof JThrowStmt) {
+            if (stmt instanceof JReturnStmt || stmt instanceof JReturnVoidStmt || stmt instanceof JThrowStmt) {
                 exits.add(stmt);
             } else if (stmt instanceof JInvokeStmt && cfg.outDegree(stmt) == 0) {
                 exits.add(stmt);
@@ -331,14 +423,24 @@ public class TraceGenerator {
     private static class CostSnapshot {
         final long known;
         final long estimated;
+        final boolean wasteful; // NEW
 
         CostSnapshot(long k, long e) {
+            this(k, e, false);
+        }
+
+        CostSnapshot(long k, long e, boolean w) {
             this.known = k;
             this.estimated = e;
+            this.wasteful = w;
         }
 
         CostSnapshot add(long k, long e) {
-            return new CostSnapshot(known + k, estimated + e);
+            return new CostSnapshot(known + k, estimated + e, wasteful);
+        }
+
+        CostSnapshot markWasteful() {
+            return new CostSnapshot(known, estimated, true);
         }
 
         long total() {
