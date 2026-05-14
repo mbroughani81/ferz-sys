@@ -33,110 +33,17 @@
 ;; -------------------------------------------------- ;;
 
 (comment
-  (do
-    (timbre/set-min-level! :info))
-
-;;
-  (-main [])
-
-  ;;
-
-  (def a1 (atom nil))
-  (def a2 (atom nil))
-  (swap! a1 (fn [_] (sample-adder/cons-A1 a2)))
-  (swap! a2 (fn [_] (sample-adder/cons-A2 a1)))
-
-  (automaton/give @a1 (sample-adder/cons-Sum-Message 1 100))
-
-  (sample-adder/start-runner a1)
-  (sample-adder/start-runner a2)
-;;
-  (do
-    (dist-db/reset-proj!)
-    (def controller (atom nil))
-    (def n1 (atom nil))
-    (def n2 (atom nil))
-    (def n3 (atom nil))
-    (swap! controller (fn [_] (dist-db/cons-Controller (atom {}))))
-    (swap! n1 (fn [_] (dist-db/cons-Node controller 1)))
-    (swap! n2 (fn [_] (dist-db/cons-Node controller 2)))
-    (swap! n3 (fn [_] (dist-db/cons-Node controller 3)))
-
-    (automaton/give @controller (dist-db/cons-Join n1))
-    (automaton/give @controller (dist-db/cons-Join n2))
-    (automaton/give @controller (dist-db/cons-Join n3))
-;;
-    (def sh1 (promise))
-    (def sh2 (promise))
-    (def sh3 (promise))
-    (dist-db/start-Node-Runner n1 sh1)
-    (dist-db/start-Node-Runner n2 sh2)
-    (dist-db/start-Node-Runner n3 sh3)
-    (dist-db/start-Controller-Runner controller)
-
-    (Thread/sleep 2000)
-    (automaton/give @controller (dist-db/cons-Start-DB))
-
-;;
-    clojure.lang.PersistentVector)
-
-  (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "value1"))
-  (automaton/give @controller (dist-db/cons-Write-Ctrl "k1" "sechs"))
-  (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "value3"))
-  (automaton/give @controller (dist-db/cons-Write-Ctrl "k3" "vv"))
-
-  (automaton/give @controller (dist-db/cons-Read-Ctrl "k1"))
-
-  (dist-db/get-partition 5 "k1")
-  (dist-db/get-partition 5 "k3")
-
-  (deliver dist-db/interrupt :stop)
-
-  (-> controller deref :id->nodes-automaton deref keys)
-  (-> controller deref :state)
-
-  (-> n3 deref :state deref :topo (get 1) deref :id)
-
-  (-> n1 deref :state deref :topo :partition-id->node-id)
-  (-> n2 deref :state deref :topo :partition-id->node-id)
-  (-> n3 deref :state deref :topo :partition-id->node-id)
-
-  (-> n1 deref :state deref :data)
-  (-> n2 deref :state deref :data)
-  (-> n3 deref :state deref :data)
-;;
-  (import '[sootup.core.inputlocation AnalysisInputLocation])
-  (import '[sootup.java.bytecode.frontend.inputlocation OTFCompileAnalysisInputLocation])
-  (import '[sootup.java.core.views JavaView])
-  (import '[sootup.java.core.types JavaClassType])
-  (import '[java.nio.file Paths])
-  (def classpath-dir (Paths/get "src/main/java/io/github/mbroughani81/demo/NPlusOne.java" (into-array String [])))
-  (def input-location (OTFCompileAnalysisInputLocation. classpath-dir))
-  (def view (JavaView. input-location))
-  (def factory (.getIdentifierFactory view))
-  (def class-name "io.github.mbroughani81.demo.NPlusOne")
-  (def class-type (.getClassType factory class-name))
-  (def soot-class (.getClass view class-type))
-  (println "Class present?" (.isPresent soot-class))
-  (def my-class (.get soot-class))
-  (.getName my-class)
-
-  (def methods (seq (.getMethods my-class)))
-  (println "Number of methods:" (count methods))
-
-  (doseq [method methods]
-    (println (.getSignature method)))
   ;;
   (do
     ;; (require 'virgil)
     (require 'clojure.string)
     (import 'io.github.mbroughani81.flowgen.TraceGenerator)
     (import 'io.github.mbroughani81.flowgen.MethodTraceSet$Trace)
+    ;; (virgil/watch-and-recompile ["src/main/java"])
     ;;
     )
 
   (do
-    ;; (virgil/watch-and-recompile ["src/main/java"])
     (defn print-path [trace]
       (println (MethodTraceSet$Trace/pathToStr (.getPath trace))))
     (defn find-first-path-diff [trace1 trace2]
